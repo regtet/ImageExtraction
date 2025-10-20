@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>图标生成器</title>
+    <style>
+        body {
+            font-family: 'Microsoft YaHei', sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        }
+
+        h1 {
+            color: #667eea;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .icon-preview {
+            display: flex;
+            justify-content: space-around;
+            margin: 30px 0;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+
+        .icon-item {
+            text-align: center;
+        }
+
+        canvas {
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            display: block;
+            margin: 10px auto;
+            background: white;
+        }
+
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 10px 5px;
+            font-weight: 600;
+            transition: transform 0.3s;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+        }
+
+        .button-group {
+            text-align: center;
+            margin-top: 30px;
+        }
+
+        .instructions {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 20px;
+            border-left: 4px solid #667eea;
+        }
+
+        .instructions h3 {
+            color: #667eea;
+            margin-top: 0;
+        }
+
+        .instructions ol {
+            padding-left: 20px;
+        }
+
+        .instructions li {
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎨 图标生成器</h1>
+        <p style="text-align: center; color: #666;">为「图片提取大师」扩展生成PNG图标</p>
+        <div class="icon-preview">
+            <div class="icon-item">
+                <h3>16×16</h3>
+                <canvas id="canvas16" width="16" height="16"></canvas>
+                <button onclick="downloadIcon('canvas16', 'icon16.png')">下载</button>
+            </div>
+            <div class="icon-item">
+                <h3>48×48</h3>
+                <canvas id="canvas48" width="48" height="48"></canvas>
+                <button onclick="downloadIcon('canvas48', 'icon48.png')">下载</button>
+            </div>
+            <div class="icon-item">
+                <h3>128×128</h3>
+                <canvas id="canvas128" width="128" height="128"></canvas>
+                <button onclick="downloadIcon('canvas128', 'icon128.png')">下载</button>
+            </div>
+        </div>
+        <div class="button-group">
+            <button onclick="generateAllIcons()" style="background: #28a745;">重新生成所有图标</button>
+            <button onclick="downloadAll()">一键下载全部</button>
+        </div>
+        <div class="instructions">
+            <h3>📝 使用说明</h3>
+            <ol>
+                <li>点击「重新生成所有图标」生成图标预览</li>
+                <li>点击「一键下载全部」或单独下载每个尺寸的图标</li>
+                <li>将下载的三个PNG文件放入 <code>icons</code> 文件夹</li>
+                <li>确保文件名分别为：icon16.png、icon48.png、icon128.png</li>
+                <li>重新加载Chrome扩展即可看到图标</li>
+            </ol>
+            <p><strong>提示：</strong>如果不生成图标，扩展仍然可以正常使用，只是会显示默认图标。</p>
+        </div>
+    </div>
+    <script>
+        function drawIcon(canvas) {
+            const ctx = canvas.getContext('2d');
+            const size = canvas.width;
+            const scale = size / 128;
+
+            ctx.clearRect(0, 0, size, size);
+
+            // 创建渐变背景
+            const gradient = ctx.createLinearGradient(0, 0, size, size);
+            gradient.addColorStop(0, '#667eea');
+            gradient.addColorStop(1, '#764ba2');
+
+            // 绘制圆形背景
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(size / 2, size / 2, size / 2 - 2 * scale, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 绘制白色矩形框
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+            ctx.beginPath();
+            const rectSize = size * 0.56;
+            const rectPos = size * 0.22;
+            const rectRadius = 6 * scale;
+            roundRect(ctx, rectPos, rectPos, rectSize, rectSize, rectRadius);
+            ctx.fill();
+
+            // 绘制山峰
+            ctx.fillStyle = 'rgba(102, 126, 234, 0.6)';
+            ctx.beginPath();
+            ctx.moveTo(size * 0.27, size * 0.66);
+            ctx.lineTo(size * 0.39, size * 0.47);
+            ctx.lineTo(size * 0.51, size * 0.59);
+            ctx.lineTo(size * 0.66, size * 0.35);
+            ctx.lineTo(size * 0.73, size * 0.47);
+            ctx.lineTo(size * 0.73, size * 0.66);
+            ctx.closePath();
+            ctx.fill();
+
+            // 绘制太阳
+            ctx.fillStyle = '#ffd700';
+            ctx.beginPath();
+            ctx.arc(size * 0.59, size * 0.35, 6 * scale, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 绘制边框
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 2.5 * scale;
+            ctx.beginPath();
+            roundRect(ctx, rectPos, rectPos, rectSize, rectSize, rectRadius);
+            ctx.stroke();
+        }
+
+        function roundRect(ctx, x, y, width, height, radius) {
+            ctx.moveTo(x + radius, y);
+            ctx.lineTo(x + width - radius, y);
+            ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+            ctx.lineTo(x + width, y + height - radius);
+            ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+            ctx.lineTo(x + radius, y + height);
+            ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+            ctx.lineTo(x, y + radius);
+            ctx.quadraticCurveTo(x, y, x + radius, y);
+        }
+
+        function downloadIcon(canvasId, filename) {
+            const canvas = document.getElementById(canvasId);
+            canvas.toBlob(blob => {
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.download = filename;
+                link.href = url;
+                link.click();
+                URL.revokeObjectURL(url);
+            });
+        }
+
+        function generateAllIcons() {
+            drawIcon(document.getElementById('canvas16'));
+            drawIcon(document.getElementById('canvas48'));
+            drawIcon(document.getElementById('canvas128'));
+        }
+
+        function downloadAll() {
+            setTimeout(() => downloadIcon('canvas16', 'icon16.png'), 100);
+            setTimeout(() => downloadIcon('canvas48', 'icon48.png'), 300);
+            setTimeout(() => downloadIcon('canvas128', 'icon128.png'), 500);
+        }
+
+        // 页面加载时自动生成图标
+        window.onload = generateAllIcons;
+    </script>
+</body>
+</html>

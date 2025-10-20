@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>图片提取大师</title>
+    <link rel="stylesheet" href="app.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- 顶部导航栏 -->
+        <header class="app-header">
+            <div class="header-left">
+                <h1>🖼️ 图片提取大师</h1>
+                <span class="version">v1.2.0</span>
+            </div>
+            <div class="header-right">
+                <div class="auto-extract-toggle">
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="autoExtractToggle">
+                        <span class="toggle-slider"></span>
+                    </label>
+                    <span class="toggle-label">自动持续提取</span>
+                </div>
+                <button id="extractBtn" class="btn-extract">
+                    <span id="extractIcon">🔍</span>
+                    <span id="extractText">提取当前页面图片</span>
+                </button>
+            </div>
+        </header>
+        <!-- 控制面板 -->
+        <div class="control-panel">
+            <div class="control-row">
+                <div class="control-group">
+                    <label>🎯 目标页面：</label>
+                    <select id="tabSelect" class="tab-selector">
+                        <option value="">请先提取图片</option>
+                    </select>
+                    <button id="refreshTabsBtn" class="btn-icon" title="刷新页面列表">🔄</button>
+                </div>
+                <div class="control-group">
+                    <label>📊 排序方式：</label>
+                    <select id="sortSelect">
+                        <option value="default">默认顺序</option>
+                        <option value="size-desc">大小（从大到小）</option>
+                        <option value="size-asc">大小（从小到大）</option>
+                        <option value="width-desc">宽度（从大到小）</option>
+                        <option value="height-desc">高度（从大到小）</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label>🔍 筛选类型：</label>
+                    <select id="filterSelect">
+                        <option value="all">全部图片</option>
+                        <option value="img">IMG标签</option>
+                        <option value="background">背景图片</option>
+                        <option value="base64">Base64图片</option>
+                    </select>
+                </div>
+            </div>
+            <div class="control-row">
+                <div class="control-group">
+                    <label>📏 最小尺寸：</label>
+                    <input type="number" id="minWidth" placeholder="宽" min="0" value="50">
+                    <span>×</span>
+                    <input type="number" id="minHeight" placeholder="高" min="0" value="50">
+                    <button id="applyFilter" class="btn-small">应用筛选</button>
+                </div>
+                <div class="control-group stats-group">
+                    <span id="imageCount" class="stat-badge">找到 0 张图片</span>
+                    <span id="selectedCount" class="stat-badge selected">已选择 0 张</span>
+                </div>
+            </div>
+        </div>
+        <!-- 尺寸快速筛选 -->
+        <div id="sizeTagsContainer" class="size-tags-container" style="display: none;">
+            <div class="size-tags-header">
+                <span class="size-tags-title">📐 快速筛选尺寸（支持多选）：</span>
+                <div class="size-filter-actions">
+                    <button id="selectAllSizesBtn" class="btn-size-action">全选</button>
+                    <button id="deselectAllSizesBtn" class="btn-size-action">全不选</button>
+                    <button id="clearSizeFilterBtn" class="btn-clear-size" style="display: none;">✕ 清除筛选</button>
+                </div>
+            </div>
+            <div id="sizeTags" class="size-tags"></div>
+        </div>
+        <!-- 操作栏 -->
+        <div class="action-bar">
+            <div class="action-left">
+                <button id="selectAllBtn" class="btn-action">✓ 全选</button>
+                <button id="deselectAllBtn" class="btn-action">✗ 取消全选</button>
+                <button id="invertSelectionBtn" class="btn-action">⇄ 反选</button>
+            </div>
+            <div class="action-right">
+                <button id="downloadSelectedBtn" class="btn-download" disabled> 💾 下载选中 (0) </button>
+                <button id="clearBtn" class="btn-action">🗑️ 清空</button>
+            </div>
+        </div>
+        <!-- 加载指示器 -->
+        <div id="loadingIndicator" class="loading-overlay" style="display: none;">
+            <div class="loading-content">
+                <div class="spinner"></div>
+                <p>正在提取图片...</p>
+                <p class="loading-tip">请保持页面标签页打开</p>
+            </div>
+        </div>
+        <!-- 图片网格容器 -->
+        <div class="content-area">
+            <div id="imageGrid" class="image-grid"></div>
+            <div id="emptyState" class="empty-state">
+                <div class="empty-icon">🖼️</div>
+                <h2>欢迎使用图片提取大师</h2>
+                <p>点击右上角的「提取当前页面图片」按钮开始</p>
+                <div class="tips">
+                    <h3>💡 使用技巧：</h3>
+                    <ul>
+                        <li>可以在多个标签页之间切换提取图片</li>
+                        <li>开启「自动持续提取」后会自动监测新图片</li>
+                        <li><kbd>Ctrl</kbd> + 点击图片可以多选</li>
+                        <li><kbd>Shift</kbd> + 点击可以范围选择</li>
+                        <li>使用筛选和排序功能快速找到需要的图片</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>

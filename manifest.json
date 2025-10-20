@@ -1,0 +1,32 @@
+{
+    "manifest_version": 3,
+    "name": "图片提取大师",
+    "version": "1.2.0",
+    "description": "提取网页中的所有图片，支持尺寸快速筛选、自动持续提取、快捷键多选和批量下载",
+    "permissions": [
+        "activeTab",
+        "downloads",
+        "scripting",
+        "tabs"
+    ],
+    "host_permissions": [
+        "<all_urls>"
+    ],
+    "action": {
+        "default_title": "图片提取大师 - 点击打开"
+    },
+    "background": {
+        "service_worker": "background.js"
+    },
+    "content_scripts": [
+        {
+            "matches": [
+                "<all_urls>"
+            ],
+            "js": [
+                "content.js"
+            ],
+            "run_at": "document_idle"
+        }
+    ]
+}
