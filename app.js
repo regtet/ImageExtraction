@@ -36,6 +36,7 @@ const deselectAllSizesBtn = document.getElementById('deselectAllSizesBtn');
 
 // 初始化
 async function init() {
+    loadSizeFilterState(); // 加载保存的尺寸筛选状态
     await loadAvailableTabs();
     setupEventListeners();
 }
@@ -195,6 +196,14 @@ async function extractImagesFromCurrentTab() {
 
         currentTabId = selectedTabId;
 
+        // 保存当前选中的图片索引（基于URL）
+        const selectedUrls = new Set();
+        selectedImages.forEach(index => {
+            if (filteredImages[index]) {
+                selectedUrls.add(filteredImages[index].url);
+            }
+        });
+
         // 注入并执行内容脚本
         const results = await chrome.scripting.executeScript({
             target: { tabId: selectedTabId },
@@ -216,6 +225,23 @@ async function extractImagesFromCurrentTab() {
 
         // 应用筛选和排序
         applyFiltersAndSort();
+
+        // 恢复之前选中的图片
+        selectedImages.clear();
+        filteredImages.forEach((img, index) => {
+            if (selectedUrls.has(img.url)) {
+                selectedImages.add(index);
+            }
+        });
+
+        // 更新UI显示选中状态
+        document.querySelectorAll('.image-item').forEach((item, index) => {
+            if (selectedImages.has(index)) {
+                item.classList.add('selected');
+            } else {
+                item.classList.remove('selected');
+            }
+        });
 
         loadingIndicator.style.display = 'none';
 
@@ -247,11 +273,22 @@ function extractImagesFromPage() {
         let src = img.currentSrc || img.src;
         if (src && !seenUrls.has(src)) {
             seenUrls.add(src);
+
+            // 尝试获取更准确的尺寸信息
+            let width = img.naturalWidth || img.width || 0;
+            let height = img.naturalHeight || img.height || 0;
+
+            // 如果尺寸为0，尝试从属性中获取
+            if (width === 0 && height === 0) {
+                width = parseInt(img.getAttribute('width')) || 0;
+                height = parseInt(img.getAttribute('height')) || 0;
+            }
+
             images.push({
                 url: src,
                 type: src.startsWith('data:') ? 'base64' : 'img',
-                width: img.naturalWidth || 0,
-                height: img.naturalHeight || 0,
+                width: width,
+                height: height,
                 alt: img.alt || ''
             });
         }
@@ -270,7 +307,12 @@ function extractImagesFromPage() {
                     let url = match.replace(/url\(["']?/, '').replace(/["']?\)/, '');
 
                     if (!url.startsWith('http') && !url.startsWith('data:')) {
-                        url = new URL(url, window.location.href).href;
+                        try {
+                            url = new URL(url, window.location.href).href;
+                        } catch (e) {
+                            console.warn('无法解析背景图片URL:', url);
+                            return;
+                        }
                     }
 
                     if (!seenUrls.has(url)) {
@@ -315,25 +357,57 @@ function extractImagesFromPage() {
 
 // 加载图片尺寸信息
 async function loadImageDimensions(images) {
-    const promises = images.map(img => {
+    const promises = images.map(async img => {
         if (img.width && img.height) {
-            return Promise.resolve();
+            return;
         }
 
+        // 对于AVIF等新格式，使用增强的加载函数
+        if (img.url.includes('.avif') || img.url.includes('avif') ||
+            img.url.includes('.webp') || img.url.includes('webp')) {
+            try {
+                const result = await loadImageWithRetry(img.url);
+                img.width = result.width;
+                img.height = result.height;
+            } catch (error) {
+                console.warn('AVIF/WebP图片加载失败:', img.url, error);
+                img.width = 0;
+                img.height = 0;
+            }
+            return;
+        }
+
+        // 对于其他格式，使用原有逻辑但增加重试
         return new Promise((resolve) => {
             const image = new Image();
+
+            const timeout = setTimeout(() => {
+                console.warn('图片加载超时:', img.url);
+                img.width = 0;
+                img.height = 0;
+                resolve();
+            }, 10000);
+
             image.onload = () => {
+                clearTimeout(timeout);
                 img.width = image.naturalWidth;
                 img.height = image.naturalHeight;
                 resolve();
             };
-            image.onerror = () => {
+
+            image.onerror = (error) => {
+                clearTimeout(timeout);
+                console.warn('图片加载失败:', img.url, error);
                 img.width = 0;
                 img.height = 0;
                 resolve();
             };
+
+            if (img.url.startsWith('http') && !img.url.startsWith('data:')) {
+                image.crossOrigin = 'anonymous';
+            }
+
             image.src = img.url;
-            setTimeout(resolve, 3000);
         });
     });
 
@@ -358,9 +432,12 @@ function applyFiltersAndSort() {
         }
 
         // 如果有激活的尺寸筛选，应用它（支持多选）
+        // 注意：当activeSizeFilters.size > 0时，只显示选中的尺寸
+        // 当activeSizeFilters.size === 0时，显示所有图片（相当于没有尺寸筛选）
         if (activeSizeFilters.size > 0) {
             const imgSize = `${img.width}×${img.height}`;
-            if (!activeSizeFilters.has(imgSize)) {
+            const isInFilter = activeSizeFilters.has(imgSize);
+            if (!isInFilter) {
                 return false;
             }
         }
@@ -425,14 +502,21 @@ function generateSizeTags() {
     // 显示容器
     sizeTagsContainer.style.display = 'block';
 
+    // 不默认全选，让用户主动选择尺寸进行筛选
+    // 当activeSizeFilters.size === 0时，显示所有图片
+    // 当activeSizeFilters.size > 0时，只显示选中的尺寸
+
     // 生成标签
     sortedSizes.forEach(([size, count]) => {
         const tag = document.createElement('button');
         tag.className = 'size-tag';
         tag.dataset.size = size;
+
+        // 根据当前筛选状态设置标签状态
         if (activeSizeFilters.has(size)) {
             tag.classList.add('active');
         }
+
         tag.innerHTML = `
       <span>${size}</span>
       <span class="count">${count}</span>
@@ -447,21 +531,54 @@ function generateSizeTags() {
 
 // 切换尺寸筛选（多选模式）
 function toggleSizeFilter(size) {
+    const tag = document.querySelector(`[data-size="${size}"]`);
+
     if (activeSizeFilters.has(size)) {
         // 取消选中
         activeSizeFilters.delete(size);
+        tag.classList.remove('active');
     } else {
         // 选中
         activeSizeFilters.add(size);
+        tag.classList.add('active');
     }
 
+    // 保存选择状态
+    saveSizeFilterState();
     updateSizeFilterButtons();
+
+    // 调试信息
+    console.log('尺寸筛选状态:', Array.from(activeSizeFilters));
+    console.log('当前筛选的尺寸数量:', activeSizeFilters.size);
+
     applyFiltersAndSort();
 
     if (activeSizeFilters.size > 0) {
         showNotification(`已筛选 ${activeSizeFilters.size} 个尺寸`, 'info');
     } else {
-        showNotification('已清除尺寸筛选', 'info');
+        showNotification('已清除尺寸筛选，显示全部图片', 'info');
+    }
+}
+
+// 保存尺寸筛选状态到本地存储
+function saveSizeFilterState() {
+    const state = Array.from(activeSizeFilters);
+    localStorage.setItem('imageExtractor_sizeFilters', JSON.stringify(state));
+}
+
+// 从本地存储加载尺寸筛选状态
+function loadSizeFilterState() {
+    try {
+        const saved = localStorage.getItem('imageExtractor_sizeFilters');
+        if (saved) {
+            const state = JSON.parse(saved);
+            activeSizeFilters = new Set(state);
+            console.log('加载保存的尺寸筛选状态:', Array.from(activeSizeFilters));
+        } else {
+            console.log('没有保存的尺寸筛选状态，将使用默认全选');
+        }
+    } catch (error) {
+        console.error('加载尺寸筛选状态失败:', error);
     }
 }
 
@@ -471,8 +588,10 @@ function selectAllSizes() {
     allSizeTags.forEach(tag => {
         const size = tag.dataset.size;
         activeSizeFilters.add(size);
+        tag.classList.add('active');
     });
 
+    saveSizeFilterState();
     updateSizeFilterButtons();
     applyFiltersAndSort();
     showNotification(`已选中全部 ${activeSizeFilters.size} 个尺寸`, 'success');
@@ -481,9 +600,17 @@ function selectAllSizes() {
 // 全不选（清除所有尺寸筛选）
 function deselectAllSizes() {
     activeSizeFilters.clear();
+
+    // 更新UI状态
+    const allSizeTags = sizeTags.querySelectorAll('.size-tag');
+    allSizeTags.forEach(tag => {
+        tag.classList.remove('active');
+    });
+
+    saveSizeFilterState();
     updateSizeFilterButtons();
     applyFiltersAndSort();
-    showNotification('已清除所有尺寸筛选', 'info');
+    showNotification('已清除所有尺寸筛选，显示全部图片', 'info');
 }
 
 // 更新尺寸筛选按钮状态
@@ -500,6 +627,7 @@ function updateSizeFilterButtons() {
 // 清除尺寸筛选（保留用于清除按钮）
 function clearSizeFilter() {
     activeSizeFilters.clear();
+    saveSizeFilterState();
     updateSizeFilterButtons();
     applyFiltersAndSort();
     showNotification('已清除所有尺寸筛选', 'info');
@@ -675,6 +803,50 @@ function getImageExtension(url) {
     return match ? match[1] : 'png';
 }
 
+// 增强的图片加载函数，专门处理AVIF等新格式
+async function loadImageWithRetry(url, maxRetries = 3) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            return await new Promise((resolve, reject) => {
+                const image = new Image();
+
+                // 设置更长的超时时间
+                const timeout = setTimeout(() => {
+                    reject(new Error('图片加载超时'));
+                }, 15000);
+
+                image.onload = () => {
+                    clearTimeout(timeout);
+                    resolve({
+                        width: image.naturalWidth,
+                        height: image.naturalHeight,
+                        success: true
+                    });
+                };
+
+                image.onerror = (error) => {
+                    clearTimeout(timeout);
+                    reject(error);
+                };
+
+                // 设置跨域属性
+                if (url.startsWith('http') && !url.startsWith('data:')) {
+                    image.crossOrigin = 'anonymous';
+                }
+
+                image.src = url;
+            });
+        } catch (error) {
+            console.warn(`图片加载失败 (尝试 ${attempt}/${maxRetries}):`, url, error);
+            if (attempt === maxRetries) {
+                return { width: 0, height: 0, success: false };
+            }
+            // 等待一段时间后重试
+            await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+        }
+    }
+}
+
 // 批量下载选中的图片
 async function downloadSelected() {
     if (selectedImages.size === 0) return;
@@ -834,8 +1006,31 @@ style.textContent = `
 `;
 document.head.appendChild(style);
 
+// 测试快速筛选功能
+function testSizeFilter() {
+    console.log('=== 快速筛选功能测试 ===');
+    console.log('当前activeSizeFilters:', Array.from(activeSizeFilters));
+    console.log('当前allImages数量:', allImages.length);
+    console.log('当前filteredImages数量:', filteredImages.length);
+
+    if (allImages.length > 0) {
+        console.log('图片尺寸统计:');
+        const sizeCount = {};
+        allImages.forEach(img => {
+            if (img.width > 0 && img.height > 0) {
+                const size = `${img.width}×${img.height}`;
+                sizeCount[size] = (sizeCount[size] || 0) + 1;
+            }
+        });
+        console.log(sizeCount);
+    }
+}
+
 // 页面加载完成后初始化
 window.addEventListener('DOMContentLoaded', init);
+
+// 添加测试函数到全局作用域，方便调试
+window.testSizeFilter = testSizeFilter;
 
 // 页面关闭前清理
 window.addEventListener('beforeunload', () => {
