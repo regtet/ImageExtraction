@@ -54,47 +54,9 @@ body {
     font-weight: 500;
 }
 
-.btn-extract {
-    background: white;
-    color: #667eea;
-    border: none;
-    padding: 12px 30px;
-    border-radius: 10px;
-    font-size: 15px;
-    font-weight: 600;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    transition: all 0.3s ease;
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15);
-}
+/* 提取按钮已移除 */
 
-.btn-extract:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
-}
-
-.btn-extract:active {
-    transform: translateY(0);
-}
-
-/* 自动提取开关 */
-.auto-extract-toggle,
-.network-monitoring-toggle {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    background: rgba(255, 255, 255, 0.1);
-    padding: 8px 16px;
-    border-radius: 10px;
-    transition: all 0.3s;
-}
-
-.auto-extract-toggle:hover,
-.network-monitoring-toggle:hover {
-    background: rgba(255, 255, 255, 0.15);
-}
+/* 移除自动提取和网络监听开关样式 */
 
 .toggle-label {
     color: white;
@@ -785,6 +747,230 @@ body {
 
 .content-area::-webkit-scrollbar-thumb:hover {
     background: #555;
+}
+
+/* 黑名单设置样式 */
+.blacklist-row {
+    border-top: 1px solid #e9ecef;
+    padding-top: 15px;
+    margin-top: 10px;
+}
+
+.blacklist-group {
+    width: 100%;
+    flex: 1;
+}
+
+.blacklist-container {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.blacklist-input-container {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.blacklist-input-container input {
+    flex: 1;
+    padding: 8px 12px;
+    border: 2px solid #dee2e6;
+    border-radius: 6px;
+    font-size: 14px;
+    transition: border-color 0.3s;
+}
+
+.blacklist-input-container input:focus {
+    outline: none;
+    border-color: #667eea;
+}
+
+.blacklist-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-height: 20px;
+}
+
+.blacklist-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: #dc3545;
+    color: white;
+    border: none;
+    border-radius: 15px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.blacklist-tag:hover {
+    background: #c82333;
+    transform: translateY(-1px);
+}
+
+.blacklist-tag .remove-btn {
+    background: rgba(255, 255, 255, 0.3);
+    border: none;
+    color: white;
+    border-radius: 50%;
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 10px;
+    margin-left: 4px;
+}
+
+.blacklist-tag .remove-btn:hover {
+    background: rgba(255, 255, 255, 0.5);
+}
+
+/* 过滤模式设置样式 */
+.filter-mode-row {
+    border-top: 1px solid #e9ecef;
+    padding-top: 15px;
+    margin-top: 10px;
+}
+
+.filter-mode-group {
+    width: 100%;
+    flex: 1;
+}
+
+.filter-mode-container {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.mode-toggle {
+    display: flex;
+    gap: 20px;
+    align-items: center;
+}
+
+.mode-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    padding: 8px 16px;
+    border: 2px solid #dee2e6;
+    border-radius: 8px;
+    transition: all 0.3s ease;
+    background: white;
+}
+
+.mode-option:hover {
+    border-color: #667eea;
+    background: #f8f9ff;
+}
+
+.mode-option input[type="radio"] {
+    margin: 0;
+    cursor: pointer;
+}
+
+.mode-option input[type="radio"]:checked + span {
+    color: #667eea;
+    font-weight: 600;
+}
+
+.mode-option:has(input[type="radio"]:checked) {
+    border-color: #667eea;
+    background: #f0f4ff;
+}
+
+/* 白名单设置样式 */
+.whitelist-row {
+    border-top: 1px solid #e9ecef;
+    padding-top: 15px;
+    margin-top: 10px;
+}
+
+.whitelist-group {
+    width: 100%;
+    flex: 1;
+}
+
+.whitelist-container {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.whitelist-input-container {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.whitelist-input-container input {
+    flex: 1;
+    padding: 8px 12px;
+    border: 2px solid #dee2e6;
+    border-radius: 6px;
+    font-size: 14px;
+    transition: border-color 0.3s;
+}
+
+.whitelist-input-container input:focus {
+    outline: none;
+    border-color: #28a745;
+}
+
+.whitelist-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-height: 20px;
+}
+
+.whitelist-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: #28a745;
+    color: white;
+    border: none;
+    border-radius: 15px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.whitelist-tag:hover {
+    background: #218838;
+    transform: translateY(-1px);
+}
+
+.whitelist-tag .remove-btn {
+    background: rgba(255, 255, 255, 0.3);
+    border: none;
+    color: white;
+    border-radius: 50%;
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 10px;
+    margin-left: 4px;
+}
+
+.whitelist-tag .remove-btn:hover {
+    background: rgba(255, 255, 255, 0.5);
 }
 
 /* 响应式设计 */

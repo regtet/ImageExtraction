@@ -12,10 +12,14 @@ let activeSizeFilters = new Set(); // 当前激活的尺寸筛选（支持多选
 let networkMonitoringEnabled = false;
 let interceptedImages = new Set(); // 存储拦截到的图片URL
 
+// 黑名单相关
+let blacklistKeywords = new Set(); // 存储黑名单关键字
+
+// 白名单相关
+let whitelistKeywords = new Set(); // 存储白名单关键字
+let filterMode = 'blacklist'; // 过滤模式：'blacklist' 或 'whitelist'
+
 // DOM元素
-const extractBtn = document.getElementById('extractBtn');
-const autoExtractToggle = document.getElementById('autoExtractToggle');
-const networkMonitoringToggle = document.getElementById('networkMonitoringToggle');
 const tabSelect = document.getElementById('tabSelect');
 const refreshTabsBtn = document.getElementById('refreshTabsBtn');
 const sortSelect = document.getElementById('sortSelect');
@@ -39,19 +43,40 @@ const clearSizeFilterBtn = document.getElementById('clearSizeFilterBtn');
 const selectAllSizesBtn = document.getElementById('selectAllSizesBtn');
 const deselectAllSizesBtn = document.getElementById('deselectAllSizesBtn');
 
+// 黑名单相关DOM元素
+const blacklistInput = document.getElementById('blacklistInput');
+const addBlacklistBtn = document.getElementById('addBlacklistBtn');
+const blacklistTags = document.getElementById('blacklistTags');
+
+// 白名单相关DOM元素
+const whitelistInput = document.getElementById('whitelistInput');
+const addWhitelistBtn = document.getElementById('addWhitelistBtn');
+const whitelistTags = document.getElementById('whitelistTags');
+const whitelistRow = document.querySelector('.whitelist-row');
+const blacklistRow = document.querySelector('.blacklist-row');
+
 // 初始化
 async function init() {
     loadSizeFilterState(); // 加载保存的尺寸筛选状态
-    await loadAvailableTabs();
+    loadBlacklistState(); // 加载黑名单状态
+    loadWhitelistState(); // 加载白名单状态
+    loadFilterModeState(); // 加载过滤模式状态
     setupEventListeners();
     setupNetworkMonitoring(); // 设置网络请求监听
+
+    // 默认开启自动持续提取和网络请求监听
+    autoExtractEnabled = true;
+    networkMonitoringEnabled = true;
+
+    // 先加载标签页，再启动网络监听
+    await loadAvailableTabs();
+
+    // 启动网络监听
+    await startNetworkMonitoring();
 }
 
 // 设置事件监听
 function setupEventListeners() {
-    extractBtn.addEventListener('click', extractImagesFromCurrentTab);
-    autoExtractToggle.addEventListener('change', toggleAutoExtract);
-    networkMonitoringToggle.addEventListener('change', toggleNetworkMonitoring);
     refreshTabsBtn.addEventListener('click', loadAvailableTabs);
     sortSelect.addEventListener('change', applyFiltersAndSort);
     filterSelect.addEventListener('change', applyFiltersAndSort);
@@ -65,6 +90,33 @@ function setupEventListeners() {
     selectAllSizesBtn.addEventListener('click', selectAllSizes);
     deselectAllSizesBtn.addEventListener('click', deselectAllSizes);
 
+    // 黑名单事件监听
+    addBlacklistBtn.addEventListener('click', addBlacklistKeyword);
+    blacklistInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            addBlacklistKeyword();
+        }
+    });
+
+    // 白名单事件监听
+    addWhitelistBtn.addEventListener('click', addWhitelistKeyword);
+    whitelistInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            addWhitelistKeyword();
+        }
+    });
+
+    // 过滤模式切换事件监听
+    const filterModeRadios = document.querySelectorAll('input[name="filterMode"]');
+    filterModeRadios.forEach(radio => {
+        radio.addEventListener('change', (e) => {
+            filterMode = e.target.value;
+            saveFilterModeState();
+            toggleFilterModeUI();
+            applyFiltersAndSort(); // 重新筛选
+        });
+    });
+
     minWidthInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') applyFiltersAndSort();
     });
@@ -74,50 +126,20 @@ function setupEventListeners() {
     });
 }
 
-// 切换自动提取
-function toggleAutoExtract() {
-    autoExtractEnabled = autoExtractToggle.checked;
-
-    if (autoExtractEnabled) {
-        const selectedTabId = parseInt(tabSelect.value);
-        if (!selectedTabId) {
-            showNotification('请先选择要监控的页面', 'info');
-            autoExtractToggle.checked = false;
-            autoExtractEnabled = false;
-            return;
-        }
-
-        // 先提取一次
-        extractImagesFromCurrentTab();
-
-        // 启动自动提取
-        startAutoExtract();
-        showNotification('已开启自动持续提取，将每5秒检测新图片', 'success');
-    } else {
-        stopAutoExtract();
-        showNotification('已关闭自动提取', 'info');
+// 自动提取功能（默认开启）
+function enableAutoExtract() {
+    const selectedTabId = parseInt(tabSelect.value);
+    if (!selectedTabId) {
+        console.log('没有选中标签页，无法启动自动提取');
+        return;
     }
-}
 
-// 切换网络请求监听
-function toggleNetworkMonitoring() {
-    networkMonitoringEnabled = networkMonitoringToggle.checked;
+    // 先提取一次
+    extractImagesFromCurrentTab();
 
-    if (networkMonitoringEnabled) {
-        const selectedTabId = parseInt(tabSelect.value);
-        if (!selectedTabId) {
-            showNotification('请先选择要监听的页面', 'info');
-            networkMonitoringToggle.checked = false;
-            networkMonitoringEnabled = false;
-            return;
-        }
-
-        // 启动网络监听
-        startNetworkMonitoring();
-    } else {
-        // 停止网络监听
-        stopNetworkMonitoring();
-    }
+    // 启动自动提取
+    startAutoExtract();
+    console.log('自动持续提取已启动');
 }
 
 // 启动自动提取
@@ -220,8 +242,11 @@ async function loadAvailableTabs() {
         if (selectedTab) {
             console.log('自动选择当前页面:', selectedTab.title);
             // 延迟一点时间确保UI完全加载
-            setTimeout(() => {
-                extractImagesFromCurrentTab();
+            setTimeout(async () => {
+                await extractImagesFromCurrentTab();
+                // 启动自动持续提取
+                enableAutoExtract();
+                console.log('插件已自动开始获取图片');
             }, 1000);
         } else {
             console.log('未找到活跃标签页，请手动选择');
@@ -475,6 +500,19 @@ function applyFiltersAndSort() {
 
     // 筛选
     filteredImages = allImages.filter(img => {
+        // 过滤模式筛选
+        if (filterMode === 'blacklist') {
+            // 黑名单模式：排除黑名单中的图片
+            if (isBlacklisted(img.url)) {
+                return false;
+            }
+        } else if (filterMode === 'whitelist') {
+            // 白名单模式：只显示白名单中的图片
+            if (!isWhitelisted(img.url)) {
+                return false;
+            }
+        }
+
         if (img.width < minWidth || img.height < minHeight) {
             return false;
         }
@@ -1095,10 +1133,9 @@ function setupNetworkMonitoring() {
             console.log('收到新图片通知:', request.data);
             interceptedImages.add(request.data.url);
 
-            // 如果当前页面是选中的标签页，自动处理新图片
-            if (request.data.tabId === currentTabId) {
-                handleNewInterceptedImage(request.data.url);
-            }
+            // 处理所有拦截到的图片，不限制标签页
+            console.log('处理拦截到的图片:', request.data.url);
+            handleNewInterceptedImage(request.data.url);
         }
     });
 }
@@ -1106,6 +1143,21 @@ function setupNetworkMonitoring() {
 // 处理新拦截到的图片
 async function handleNewInterceptedImage(url) {
     try {
+        // 根据过滤模式检查图片
+        if (filterMode === 'blacklist') {
+            // 黑名单模式：检查是否在黑名单中
+            if (isBlacklisted(url)) {
+                console.log('图片被黑名单拦截:', url);
+                return;
+            }
+        } else if (filterMode === 'whitelist') {
+            // 白名单模式：检查是否在白名单中
+            if (!isWhitelisted(url)) {
+                console.log('图片不在白名单中:', url);
+                return;
+            }
+        }
+
         // 创建图片对象
         const img = {
             url: url,
@@ -1133,20 +1185,32 @@ async function handleNewInterceptedImage(url) {
 // 启动网络请求监听
 async function startNetworkMonitoring() {
     try {
+        console.log('开始启动网络监听...');
+
         // 启动background script的网络拦截
         await chrome.runtime.sendMessage({ action: 'startNetworkInterceptor' });
+        console.log('Background网络拦截已启动');
 
         // 启动content script的网络监听
         const selectedTabId = parseInt(tabSelect.value);
+        console.log('选中的标签页ID:', selectedTabId);
+
         if (selectedTabId) {
-            await chrome.tabs.sendMessage(selectedTabId, { action: 'startNetworkMonitoring' });
+            try {
+                await chrome.tabs.sendMessage(selectedTabId, { action: 'startNetworkMonitoring' });
+                console.log('Content script网络监听已启动');
+            } catch (error) {
+                console.error('启动content script监听失败:', error);
+                // 即使content script失败，background script仍然可以工作
+            }
+        } else {
+            console.log('没有选中标签页，只启动background监听');
         }
 
         networkMonitoringEnabled = true;
-        showNotification('网络请求监听已启动', 'success');
+        console.log('网络请求监听已启动');
     } catch (error) {
         console.error('启动网络监听失败:', error);
-        showNotification('启动网络监听失败', 'error');
     }
 }
 
@@ -1224,12 +1288,259 @@ async function testAutoSelect() {
     };
 }
 
+// 测试网络监听功能
+async function testNetworkMonitoring() {
+    console.log('=== 测试网络监听功能 ===');
+    console.log('当前拦截的图片数量:', interceptedImages.size);
+    console.log('当前图片列表数量:', allImages.length);
+    console.log('当前筛选后的图片数量:', filteredImages.length);
+    console.log('网络监听状态:', networkMonitoringEnabled);
+    console.log('自动提取状态:', autoExtractEnabled);
+    console.log('当前选中的标签页ID:', parseInt(tabSelect.value));
+
+    // 获取拦截到的图片
+    const intercepted = await getInterceptedImages();
+    console.log('Background中拦截的图片:', intercepted);
+
+    return {
+        interceptedImages: Array.from(interceptedImages),
+        allImages: allImages.length,
+        filteredImages: filteredImages.length,
+        backgroundIntercepted: intercepted,
+        networkMonitoringEnabled,
+        autoExtractEnabled
+    };
+}
+
+// 手动触发图片提取（用于测试）
+async function manualExtract() {
+    console.log('手动触发图片提取...');
+    const selectedTabId = parseInt(tabSelect.value);
+    if (selectedTabId) {
+        await extractImagesFromCurrentTab();
+    } else {
+        console.log('没有选中标签页');
+    }
+}
+
+// 处理所有已拦截的图片
+async function processAllInterceptedImages() {
+    console.log('开始处理所有已拦截的图片...');
+    const intercepted = await getInterceptedImages();
+    console.log('获取到拦截的图片数量:', intercepted.length);
+
+    let processedCount = 0;
+    for (const imgData of intercepted) {
+        try {
+            await handleNewInterceptedImage(imgData.url);
+            processedCount++;
+        } catch (error) {
+            console.error('处理图片失败:', imgData.url, error);
+        }
+    }
+
+    console.log(`已处理 ${processedCount} 张图片`);
+    return processedCount;
+}
+
+// 黑名单相关函数
+function isBlacklisted(url) {
+    for (const keyword of blacklistKeywords) {
+        if (url.toLowerCase().includes(keyword.toLowerCase())) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function addBlacklistKeyword() {
+    const keyword = blacklistInput.value.trim();
+    if (!keyword) {
+        showNotification('请输入关键字', 'error');
+        return;
+    }
+
+    if (blacklistKeywords.has(keyword)) {
+        showNotification('关键字已存在', 'error');
+        return;
+    }
+
+    blacklistKeywords.add(keyword);
+    blacklistInput.value = '';
+    saveBlacklistState();
+    renderBlacklistTags();
+    applyFiltersAndSort(); // 重新筛选，移除黑名单图片
+    showNotification(`已添加黑名单关键字: ${keyword}`, 'success');
+}
+
+function removeBlacklistKeyword(keyword) {
+    blacklistKeywords.delete(keyword);
+    saveBlacklistState();
+    renderBlacklistTags();
+    applyFiltersAndSort(); // 重新筛选
+    showNotification(`已移除黑名单关键字: ${keyword}`, 'info');
+}
+
+function renderBlacklistTags() {
+    blacklistTags.innerHTML = '';
+
+    blacklistKeywords.forEach(keyword => {
+        const tag = document.createElement('div');
+        tag.className = 'blacklist-tag';
+
+        const span = document.createElement('span');
+        span.textContent = keyword;
+
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'remove-btn';
+        removeBtn.textContent = '×';
+        removeBtn.addEventListener('click', () => removeBlacklistKeyword(keyword));
+
+        tag.appendChild(span);
+        tag.appendChild(removeBtn);
+        blacklistTags.appendChild(tag);
+    });
+}
+
+function saveBlacklistState() {
+    const state = Array.from(blacklistKeywords);
+    localStorage.setItem('imageExtractor_blacklist', JSON.stringify(state));
+}
+
+function loadBlacklistState() {
+    try {
+        const saved = localStorage.getItem('imageExtractor_blacklist');
+        if (saved) {
+            const state = JSON.parse(saved);
+            blacklistKeywords = new Set(state);
+            renderBlacklistTags();
+            console.log('加载黑名单状态:', Array.from(blacklistKeywords));
+        }
+    } catch (error) {
+        console.error('加载黑名单状态失败:', error);
+    }
+}
+
+// 白名单相关函数
+function isWhitelisted(url) {
+    for (const keyword of whitelistKeywords) {
+        if (url.toLowerCase().includes(keyword.toLowerCase())) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function addWhitelistKeyword() {
+    const keyword = whitelistInput.value.trim();
+    if (!keyword) {
+        showNotification('请输入关键字', 'error');
+        return;
+    }
+
+    if (whitelistKeywords.has(keyword)) {
+        showNotification('关键字已存在', 'error');
+        return;
+    }
+
+    whitelistKeywords.add(keyword);
+    whitelistInput.value = '';
+    saveWhitelistState();
+    renderWhitelistTags();
+    applyFiltersAndSort(); // 重新筛选
+    showNotification(`已添加白名单关键字: ${keyword}`, 'success');
+}
+
+function removeWhitelistKeyword(keyword) {
+    whitelistKeywords.delete(keyword);
+    saveWhitelistState();
+    renderWhitelistTags();
+    applyFiltersAndSort(); // 重新筛选
+    showNotification(`已移除白名单关键字: ${keyword}`, 'info');
+}
+
+function renderWhitelistTags() {
+    whitelistTags.innerHTML = '';
+
+    whitelistKeywords.forEach(keyword => {
+        const tag = document.createElement('div');
+        tag.className = 'whitelist-tag';
+
+        const span = document.createElement('span');
+        span.textContent = keyword;
+
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'remove-btn';
+        removeBtn.textContent = '×';
+        removeBtn.addEventListener('click', () => removeWhitelistKeyword(keyword));
+
+        tag.appendChild(span);
+        tag.appendChild(removeBtn);
+        whitelistTags.appendChild(tag);
+    });
+}
+
+function saveWhitelistState() {
+    const state = Array.from(whitelistKeywords);
+    localStorage.setItem('imageExtractor_whitelist', JSON.stringify(state));
+}
+
+function loadWhitelistState() {
+    try {
+        const saved = localStorage.getItem('imageExtractor_whitelist');
+        if (saved) {
+            const state = JSON.parse(saved);
+            whitelistKeywords = new Set(state);
+            renderWhitelistTags();
+            console.log('加载白名单状态:', Array.from(whitelistKeywords));
+        }
+    } catch (error) {
+        console.error('加载白名单状态失败:', error);
+    }
+}
+
+// 过滤模式相关函数
+function toggleFilterModeUI() {
+    if (filterMode === 'blacklist') {
+        blacklistRow.style.display = 'block';
+        whitelistRow.style.display = 'none';
+    } else if (filterMode === 'whitelist') {
+        blacklistRow.style.display = 'none';
+        whitelistRow.style.display = 'block';
+    }
+}
+
+function saveFilterModeState() {
+    localStorage.setItem('imageExtractor_filterMode', filterMode);
+}
+
+function loadFilterModeState() {
+    try {
+        const saved = localStorage.getItem('imageExtractor_filterMode');
+        if (saved) {
+            filterMode = saved;
+            // 设置单选按钮状态
+            const radio = document.querySelector(`input[name="filterMode"][value="${filterMode}"]`);
+            if (radio) {
+                radio.checked = true;
+            }
+            toggleFilterModeUI();
+            console.log('加载过滤模式状态:', filterMode);
+        }
+    } catch (error) {
+        console.error('加载过滤模式状态失败:', error);
+    }
+}
+
 // 添加测试函数到全局作用域，方便调试
 window.testSizeFilter = testSizeFilter;
 window.startNetworkMonitoring = startNetworkMonitoring;
 window.stopNetworkMonitoring = stopNetworkMonitoring;
 window.getInterceptedImages = getInterceptedImages;
 window.testAutoSelect = testAutoSelect;
+window.testNetworkMonitoring = testNetworkMonitoring;
+window.manualExtract = manualExtract;
+window.processAllInterceptedImages = processAllInterceptedImages;
 
 // 页面关闭前清理
 window.addEventListener('beforeunload', () => {

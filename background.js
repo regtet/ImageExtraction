@@ -138,6 +138,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             sendResponse({ success: true });
             break;
 
+        case 'imageDetected':
+            // 处理从content script检测到的图片
+            console.log('Background收到图片检测:', request.data);
+            interceptedImages.set(request.data.url, {
+                url: request.data.url,
+                timestamp: Date.now(),
+                tabId: sender.tab?.id,
+                type: request.data.type || 'performance_observer',
+                size: request.data.size || 0,
+                duration: request.data.duration || 0
+            });
+
+            // 通知应用页面有新的图片
+            notifyAppPage('newImage', {
+                url: request.data.url,
+                tabId: sender.tab?.id,
+                type: request.data.type
+            });
+            break;
+
         case 'getInterceptedImages':
             sendResponse({
                 success: true,

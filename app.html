@@ -15,24 +15,7 @@
                 <span class="version">v1.2.0</span>
             </div>
             <div class="header-right">
-                <div class="auto-extract-toggle">
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="autoExtractToggle">
-                        <span class="toggle-slider"></span>
-                    </label>
-                    <span class="toggle-label">自动持续提取</span>
-                </div>
-                <div class="network-monitoring-toggle">
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="networkMonitoringToggle">
-                        <span class="toggle-slider"></span>
-                    </label>
-                    <span class="toggle-label">网络请求监听</span>
-                </div>
-                <button id="extractBtn" class="btn-extract">
-                    <span id="extractIcon">🔍</span>
-                    <span id="extractText">提取当前页面图片</span>
-                </button>
+                <!-- 提取按钮已移除，插件将自动获取图片 -->
             </div>
         </header>
         <!-- 控制面板 -->
@@ -76,6 +59,52 @@
                 <div class="control-group stats-group">
                     <span id="imageCount" class="stat-badge">找到 0 张图片</span>
                     <span id="selectedCount" class="stat-badge selected">已选择 0 张</span>
+                </div>
+            </div>
+            <!-- 过滤模式设置 -->
+            <div class="control-row filter-mode-row">
+                <div class="control-group filter-mode-group">
+                    <label>🔍 过滤模式：</label>
+                    <div class="filter-mode-container">
+                        <div class="mode-toggle">
+                            <label class="mode-option">
+                                <input type="radio" name="filterMode" value="blacklist" checked>
+                                <span>黑名单模式</span>
+                            </label>
+                            <label class="mode-option">
+                                <input type="radio" name="filterMode" value="whitelist">
+                                <span>白名单模式</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 黑名单设置 -->
+            <div class="control-row blacklist-row">
+                <div class="control-group blacklist-group">
+                    <label>🚫 黑名单设置：</label>
+                    <div class="blacklist-container">
+                        <div class="blacklist-input-container">
+                            <input type="text" id="blacklistInput" placeholder="输入要屏蔽的地址关键字，如：ad、banner、logo">
+                            <button id="addBlacklistBtn" class="btn-small">添加</button>
+                        </div>
+                        <div id="blacklistTags" class="blacklist-tags"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 白名单设置 -->
+            <div class="control-row whitelist-row" style="display: none;">
+                <div class="control-group whitelist-group">
+                    <label>✅ 白名单设置：</label>
+                    <div class="whitelist-container">
+                        <div class="whitelist-input-container">
+                            <input type="text" id="whitelistInput" placeholder="输入要放行的地址关键字，如：photo、image、pic">
+                            <button id="addWhitelistBtn" class="btn-small">添加</button>
+                        </div>
+                        <div id="whitelistTags" class="whitelist-tags"></div>
+                    </div>
                 </div>
             </div>
         </div>
