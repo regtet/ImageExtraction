@@ -8,9 +8,14 @@ let lastImageCount = 0;
 let lastClickedIndex = -1; // 用于Shift范围选择
 let activeSizeFilters = new Set(); // 当前激活的尺寸筛选（支持多选）
 
+// 网络请求监听相关
+let networkMonitoringEnabled = false;
+let interceptedImages = new Set(); // 存储拦截到的图片URL
+
 // DOM元素
 const extractBtn = document.getElementById('extractBtn');
 const autoExtractToggle = document.getElementById('autoExtractToggle');
+const networkMonitoringToggle = document.getElementById('networkMonitoringToggle');
 const tabSelect = document.getElementById('tabSelect');
 const refreshTabsBtn = document.getElementById('refreshTabsBtn');
 const sortSelect = document.getElementById('sortSelect');
@@ -39,12 +44,14 @@ async function init() {
     loadSizeFilterState(); // 加载保存的尺寸筛选状态
     await loadAvailableTabs();
     setupEventListeners();
+    setupNetworkMonitoring(); // 设置网络请求监听
 }
 
 // 设置事件监听
 function setupEventListeners() {
     extractBtn.addEventListener('click', extractImagesFromCurrentTab);
     autoExtractToggle.addEventListener('change', toggleAutoExtract);
+    networkMonitoringToggle.addEventListener('change', toggleNetworkMonitoring);
     refreshTabsBtn.addEventListener('click', loadAvailableTabs);
     sortSelect.addEventListener('change', applyFiltersAndSort);
     filterSelect.addEventListener('change', applyFiltersAndSort);
@@ -89,6 +96,27 @@ function toggleAutoExtract() {
     } else {
         stopAutoExtract();
         showNotification('已关闭自动提取', 'info');
+    }
+}
+
+// 切换网络请求监听
+function toggleNetworkMonitoring() {
+    networkMonitoringEnabled = networkMonitoringToggle.checked;
+
+    if (networkMonitoringEnabled) {
+        const selectedTabId = parseInt(tabSelect.value);
+        if (!selectedTabId) {
+            showNotification('请先选择要监听的页面', 'info');
+            networkMonitoringToggle.checked = false;
+            networkMonitoringEnabled = false;
+            return;
+        }
+
+        // 启动网络监听
+        startNetworkMonitoring();
+    } else {
+        // 停止网络监听
+        stopNetworkMonitoring();
     }
 }
 
@@ -151,6 +179,10 @@ function stopAutoExtract() {
 // 加载可用标签页
 async function loadAvailableTabs() {
     try {
+        // 首先获取当前活跃的标签页
+        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        console.log('当前活跃标签页:', activeTab);
+
         const tabs = await chrome.tabs.query({});
         tabSelect.innerHTML = '';
 
@@ -167,16 +199,33 @@ async function loadAvailableTabs() {
             return;
         }
 
+        // 找到当前活跃的标签页
+        let selectedTab = null;
         validTabs.forEach(tab => {
             const option = document.createElement('option');
             option.value = tab.id;
             option.textContent = tab.title || tab.url;
-            if (tab.active) {
+
+            // 检查是否是当前活跃的标签页
+            if (activeTab && tab.id === activeTab.id) {
                 option.selected = true;
                 currentTabId = tab.id;
+                selectedTab = tab;
+                console.log('找到活跃标签页:', tab.title);
             }
             tabSelect.appendChild(option);
         });
+
+        // 如果找到了活跃标签页，自动提取该页面的图片
+        if (selectedTab) {
+            console.log('自动选择当前页面:', selectedTab.title);
+            // 延迟一点时间确保UI完全加载
+            setTimeout(() => {
+                extractImagesFromCurrentTab();
+            }, 1000);
+        } else {
+            console.log('未找到活跃标签页，请手动选择');
+        }
     } catch (error) {
         console.error('加载标签页失败:', error);
     }
@@ -185,7 +234,10 @@ async function loadAvailableTabs() {
 // 从当前选中的标签页提取图片
 async function extractImagesFromCurrentTab() {
     const selectedTabId = parseInt(tabSelect.value);
+    console.log('准备提取图片，选中的标签页ID:', selectedTabId);
+
     if (!selectedTabId) {
+        console.log('没有选中标签页，请手动选择');
         alert('请选择要提取图片的页面');
         return;
     }
@@ -435,7 +487,10 @@ function applyFiltersAndSort() {
         // 注意：当activeSizeFilters.size > 0时，只显示选中的尺寸
         // 当activeSizeFilters.size === 0时，显示所有图片（相当于没有尺寸筛选）
         if (activeSizeFilters.size > 0) {
-            const imgSize = `${img.width}×${img.height}`;
+            // 确保尺寸为整数进行比较
+            const width = Math.round(img.width);
+            const height = Math.round(img.height);
+            const imgSize = `${width}×${height}`;
             const isInFilter = activeSizeFilters.has(imgSize);
             if (!isInFilter) {
                 return false;
@@ -471,11 +526,14 @@ function generateSizeTags() {
         // 跳过无效尺寸
         if (img.width === 0 || img.height === 0) return;
 
-        const size = `${img.width}×${img.height}`;
+        // 确保尺寸为整数
+        const width = Math.round(img.width);
+        const height = Math.round(img.height);
+        const size = `${width}×${height}`;
         sizeCount[size] = (sizeCount[size] || 0) + 1;
     });
 
-    // 按面积(宽×高)从大到小排序；同面积按数量从多到少
+    // 按数量从多到少排序，数量相同时按面积从大到小排序
     const sortedSizes = Object.entries(sizeCount)
         .map(([size, count]) => {
             const [wStr, hStr] = size.split('×');
@@ -484,8 +542,8 @@ function generateSizeTags() {
             return { size, count, area: w * h };
         })
         .sort((a, b) => {
-            if (b.area !== a.area) return b.area - a.area; // 面积优先
-            if (b.count !== a.count) return b.count - a.count; // 数量次之
+            if (b.count !== a.count) return b.count - a.count; // 数量优先
+            if (b.area !== a.area) return b.area - a.area; // 面积次之
             return 0;
         })
         .slice(0, 20) // 最多显示20个尺寸
@@ -667,7 +725,7 @@ function renderImages() {
       </div>
       <div class="image-info">
         <span class="image-type ${typeClass}">${typeName}</span>
-        <div>尺寸: ${img.width} × ${img.height}</div>
+        <div>尺寸: ${Math.round(img.width)} × ${Math.round(img.height)}</div>
         <div>大小: ${formatFileSize(img.url.length)}</div>
       </div>
     `;
@@ -1029,8 +1087,149 @@ function testSizeFilter() {
 // 页面加载完成后初始化
 window.addEventListener('DOMContentLoaded', init);
 
+// 网络请求监听相关函数
+function setupNetworkMonitoring() {
+    // 监听来自background script的消息
+    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+        if (request.action === 'newImage') {
+            console.log('收到新图片通知:', request.data);
+            interceptedImages.add(request.data.url);
+
+            // 如果当前页面是选中的标签页，自动处理新图片
+            if (request.data.tabId === currentTabId) {
+                handleNewInterceptedImage(request.data.url);
+            }
+        }
+    });
+}
+
+// 处理新拦截到的图片
+async function handleNewInterceptedImage(url) {
+    try {
+        // 创建图片对象
+        const img = {
+            url: url,
+            type: 'network_request',
+            width: 0,
+            height: 0,
+            alt: ''
+        };
+
+        // 加载图片尺寸
+        await loadImageDimensions([img]);
+
+        // 检查是否已存在
+        const existingUrls = new Set(allImages.map(img => img.url));
+        if (!existingUrls.has(url)) {
+            allImages.push(img);
+            applyFiltersAndSort();
+            showNotification(`网络监听发现新图片: ${url}`, 'success');
+        }
+    } catch (error) {
+        console.error('处理拦截图片失败:', error);
+    }
+}
+
+// 启动网络请求监听
+async function startNetworkMonitoring() {
+    try {
+        // 启动background script的网络拦截
+        await chrome.runtime.sendMessage({ action: 'startNetworkInterceptor' });
+
+        // 启动content script的网络监听
+        const selectedTabId = parseInt(tabSelect.value);
+        if (selectedTabId) {
+            await chrome.tabs.sendMessage(selectedTabId, { action: 'startNetworkMonitoring' });
+        }
+
+        networkMonitoringEnabled = true;
+        showNotification('网络请求监听已启动', 'success');
+    } catch (error) {
+        console.error('启动网络监听失败:', error);
+        showNotification('启动网络监听失败', 'error');
+    }
+}
+
+// 停止网络请求监听
+async function stopNetworkMonitoring() {
+    try {
+        // 停止background script的网络拦截
+        await chrome.runtime.sendMessage({ action: 'stopNetworkInterceptor' });
+
+        // 停止content script的网络监听
+        const selectedTabId = parseInt(tabSelect.value);
+        if (selectedTabId) {
+            await chrome.tabs.sendMessage(selectedTabId, { action: 'stopNetworkMonitoring' });
+        }
+
+        networkMonitoringEnabled = false;
+        showNotification('网络请求监听已停止', 'info');
+    } catch (error) {
+        console.error('停止网络监听失败:', error);
+    }
+}
+
+// 获取拦截到的图片
+async function getInterceptedImages() {
+    try {
+        const response = await chrome.runtime.sendMessage({ action: 'getInterceptedImages' });
+        if (response.success) {
+            return response.images;
+        }
+    } catch (error) {
+        console.error('获取拦截图片失败:', error);
+    }
+    return [];
+}
+
+// 清除拦截的图片
+async function clearInterceptedImages() {
+    try {
+        await chrome.runtime.sendMessage({ action: 'clearInterceptedImages' });
+        interceptedImages.clear();
+    } catch (error) {
+        console.error('清除拦截图片失败:', error);
+    }
+}
+
+// 测试自动选择功能
+async function testAutoSelect() {
+    console.log('=== 测试自动选择功能 ===');
+
+    // 获取当前活跃标签页
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    console.log('当前活跃标签页:', activeTab);
+
+    // 获取所有标签页
+    const tabs = await chrome.tabs.query({});
+    console.log('所有标签页数量:', tabs.length);
+
+    // 过滤有效标签页
+    const validTabs = tabs.filter(tab =>
+        !tab.url.startsWith('chrome://') &&
+        !tab.url.startsWith('chrome-extension://') &&
+        !tab.url.startsWith('edge://') &&
+        !tab.url.startsWith('about:')
+    );
+    console.log('有效标签页数量:', validTabs.length);
+
+    // 检查当前选中的标签页
+    const selectedTabId = parseInt(tabSelect.value);
+    console.log('当前选中的标签页ID:', selectedTabId);
+
+    return {
+        activeTab,
+        validTabs,
+        selectedTabId
+    };
+}
+
 // 添加测试函数到全局作用域，方便调试
 window.testSizeFilter = testSizeFilter;
+window.startNetworkMonitoring = startNetworkMonitoring;
+window.stopNetworkMonitoring = stopNetworkMonitoring;
+window.getInterceptedImages = getInterceptedImages;
+window.testAutoSelect = testAutoSelect;
 
 // 页面关闭前清理
 window.addEventListener('beforeunload', () => {

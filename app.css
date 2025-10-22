@@ -80,7 +80,8 @@ body {
 }
 
 /* 自动提取开关 */
-.auto-extract-toggle {
+.auto-extract-toggle,
+.network-monitoring-toggle {
     display: flex;
     align-items: center;
     gap: 12px;
@@ -90,7 +91,8 @@ body {
     transition: all 0.3s;
 }
 
-.auto-extract-toggle:hover {
+.auto-extract-toggle:hover,
+.network-monitoring-toggle:hover {
     background: rgba(255, 255, 255, 0.15);
 }
 
@@ -351,34 +353,44 @@ body {
     align-items: center;
     gap: 6px;
     padding: 6px 14px;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    border: none;
+    background: #f8f9fa;
+    color: #495057;
+    border: 2px solid #dee2e6;
     border-radius: 20px;
     font-size: 13px;
     font-weight: 500;
     cursor: pointer;
     transition: all 0.3s ease;
-    box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
     white-space: nowrap;
 }
 
 .size-tag:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.5);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+    border-color: #667eea;
 }
 
 .size-tag.active {
-    background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
-    box-shadow: 0 0 0 3px rgba(40, 167, 69, 0.2);
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border-color: #667eea;
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+    transform: translateY(-1px);
 }
 
 .size-tag .count {
-    background: rgba(255, 255, 255, 0.3);
+    background: rgba(108, 117, 125, 0.2);
+    color: #6c757d;
     padding: 2px 6px;
     border-radius: 10px;
     font-size: 11px;
     font-weight: 600;
+}
+
+.size-tag.active .count {
+    background: rgba(255, 255, 255, 0.3);
+    color: white;
 }
 
 .btn-clear-size {
