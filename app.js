@@ -11,7 +11,7 @@ let activeSizeFilters = new Set(); // 当前激活的尺寸筛选（支持多选
 // 网络请求监听相关
 let networkMonitoringEnabled = false;
 let interceptedImages = new Set(); // 存储拦截到的图片URL
-let processingImages = new Set(); // 正在处理的图片URL，防止重复处理
+let processingImages = new Set(); // 正在处理的图片URL，防止重复处理（使用去重Key）
 
 // 黑名单相关
 let blacklistKeywords = new Set(); // 存储黑名单关键字
@@ -319,10 +319,12 @@ async function extractImagesFromCurrentTab() {
         await loadImageDimensions(newImages);
 
         // 添加到现有图片列表（不重复）
-        const existingUrls = new Set(allImages.map(img => img.url));
+        const existingKeys = new Set(allImages.map(img => getDedupKeyFromUrl(img.url)));
         newImages.forEach(img => {
-            if (!existingUrls.has(img.url)) {
+            const key = getDedupKeyFromUrl(img.url);
+            if (!existingKeys.has(key)) {
                 allImages.push(img);
+                existingKeys.add(key);
             }
         });
 
@@ -825,6 +827,55 @@ function clearSizeFilter() {
     showNotification('已清除所有尺寸筛选', 'info');
 }
 
+// 隐藏该尺寸（等同于点击上方对应尺寸标签）
+function hideThisImageSize(img) {
+    const size = `${Math.round(img.width)}×${Math.round(img.height)}`;
+    hideSize(size);
+}
+
+function hideSize(size) {
+    const tag = document.querySelector(`[data-size="${size}"]`);
+
+    if (tag) {
+        // 若该尺寸当前处于选中，则点击以取消
+        if (tag.classList.contains('active')) {
+            tag.click();
+            return;
+        }
+    }
+
+    // 若当前没有任何选中的尺寸，则将所有已有尺寸设为选中，但排除该尺寸
+    if (activeSizeFilters.size === 0) {
+        const sizes = getSizeDisplayOrder();
+        activeSizeFilters = new Set(sizes.filter(s => s !== size));
+        saveSizeFilterState();
+        // 重新渲染标签以同步UI的active状态
+        generateSizeTags();
+        updateSizeFilterButtons();
+        applyFiltersAndSort();
+        return;
+    }
+
+    // 若已有其它选中尺寸，确保该尺寸不在选中集合中
+    if (activeSizeFilters.has(size)) {
+        activeSizeFilters.delete(size);
+        saveSizeFilterState();
+        generateSizeTags();
+        updateSizeFilterButtons();
+        applyFiltersAndSort();
+        return;
+    }
+
+    // 若该尺寸本就未选中但仍显示，说明没有尺寸筛选在起作用（不应发生）。
+    // 作为兜底：将所有尺寸选中后移除该尺寸。
+    const sizes = getSizeDisplayOrder();
+    activeSizeFilters = new Set(sizes.filter(s => s !== size));
+    saveSizeFilterState();
+    generateSizeTags();
+    updateSizeFilterButtons();
+    applyFiltersAndSort();
+}
+
 // 渲染图片网格
 function renderImages() {
     imageGrid.innerHTML = '';
@@ -863,7 +914,10 @@ function renderImages() {
 
         item.innerHTML = `
       <div class="checkbox-overlay"></div>
-      <button class="download-btn" title="下载">💾</button>
+      <div class="card-actions">
+        <button class="hide-size-btn" title="隐藏此尺寸">🚫</button>
+        <button class="download-btn" title="下载">💾</button>
+      </div>
       <div class="image-wrapper">
         <img src="${img.url}" alt="${img.alt || '图片'}" loading="lazy">
       </div>
@@ -877,7 +931,7 @@ function renderImages() {
 
         // 点击选择/取消选择（支持Ctrl和Shift）
         item.addEventListener('click', (e) => {
-            if (e.target.closest('.download-btn')) {
+            if (e.target.closest('.download-btn') || e.target.closest('.hide-size-btn')) {
                 return;
             }
             handleImageClick(index, item, e);
@@ -888,6 +942,13 @@ function renderImages() {
         downloadBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             downloadImage(img, index);
+        });
+
+        // 隐藏该尺寸
+        const hideSizeBtn = item.querySelector('.hide-size-btn');
+        hideSizeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            hideThisImageSize(img);
         });
 
         imageGrid.appendChild(item);
@@ -965,15 +1026,31 @@ function formatFileSize(bytes) {
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 }
 
+// 归一化图片URL用于去重（去掉查询参数与hash，转小写）
+function normalizeImageUrl(url) {
+    try {
+        if (url.startsWith('data:')) return url; // base64 保持原样
+        const u = new URL(url);
+        return (u.origin + u.pathname).toLowerCase();
+    } catch (e) {
+        return url.toLowerCase();
+    }
+}
+
+function getDedupKeyFromUrl(url) {
+    return normalizeImageUrl(url);
+}
+
 // 去重函数 - 移除重复的图片
 function removeDuplicateImages() {
-    const seenUrls = new Set();
+    const seenKeys = new Set();
     const uniqueImages = [];
     let removedCount = 0;
 
     allImages.forEach(img => {
-        if (!seenUrls.has(img.url)) {
-            seenUrls.add(img.url);
+        const key = getDedupKeyFromUrl(img.url);
+        if (!seenKeys.has(key)) {
+            seenKeys.add(key);
             uniqueImages.push(img);
         } else {
             removedCount++;
@@ -1327,19 +1404,20 @@ function setupNetworkMonitoring() {
 async function handleNewInterceptedImage(url) {
     try {
         // 防止重复处理
-        if (processingImages.has(url)) {
+        const dedupKey = getDedupKeyFromUrl(url);
+        if (processingImages.has(dedupKey)) {
             console.log('图片正在处理中，跳过:', url);
             return;
         }
 
         // 检查是否已存在
-        const existingUrls = new Set(allImages.map(img => img.url));
-        if (existingUrls.has(url)) {
+        const existingKeys = new Set(allImages.map(img => getDedupKeyFromUrl(img.url)));
+        if (existingKeys.has(dedupKey)) {
             console.log('图片已存在，跳过:', url);
             return;
         }
 
-        processingImages.add(url);
+        processingImages.add(dedupKey);
         console.log('开始处理拦截图片:', url);
         console.log('当前过滤模式:', filterMode);
         console.log('黑名单关键字:', Array.from(blacklistKeywords));
@@ -1417,7 +1495,7 @@ async function handleNewInterceptedImage(url) {
         console.error('处理拦截图片失败:', error);
     } finally {
         // 清理处理状态
-        processingImages.delete(url);
+        processingImages.delete(dedupKey);
     }
 }
 

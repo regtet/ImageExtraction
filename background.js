@@ -106,11 +106,11 @@ function isImageRequest(url) {
     const imageMimeTypes = /\.(jpg|jpeg|png|gif|webp|avif|bmp|svg|ico|tiff?)(\?.*)?$/i;
 
     return imageExtensions.test(url) ||
-           imageMimeTypes.test(url) ||
-           url.includes('image/') ||
-           url.includes('img/') ||
-           url.includes('photo/') ||
-           url.includes('picture/');
+        imageMimeTypes.test(url) ||
+        url.includes('image/') ||
+        url.includes('img/') ||
+        url.includes('photo/') ||
+        url.includes('picture/');
 }
 
 // 通知应用页面
