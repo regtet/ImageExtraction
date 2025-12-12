@@ -49,64 +49,12 @@
                 </div>
             </div>
             <div class="control-row">
-                <div class="control-group">
-                    <label>📏 最小尺寸：</label>
-                    <input type="number" id="minWidth" placeholder="宽" min="0" value="50">
-                    <span>×</span>
-                    <input type="number" id="minHeight" placeholder="高" min="0" value="50">
-                    <button id="applyFilter" class="btn-small">应用筛选</button>
-                </div>
                 <div class="control-group stats-group">
                     <span id="imageCount" class="stat-badge">找到 0 张图片</span>
                     <span id="selectedCount" class="stat-badge selected">已选择 0 张</span>
                 </div>
             </div>
-            <!-- 过滤模式设置 -->
-            <div class="control-row filter-mode-row">
-                <div class="control-group filter-mode-group">
-                    <label>🔍 过滤模式：</label>
-                    <div class="filter-mode-container">
-                        <div class="mode-toggle">
-                            <label class="mode-option">
-                                <input type="radio" name="filterMode" value="blacklist" checked>
-                                <span>黑名单模式</span>
-                            </label>
-                            <label class="mode-option">
-                                <input type="radio" name="filterMode" value="whitelist">
-                                <span>白名单模式</span>
-                            </label>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 黑名单设置 -->
-            <div class="control-row blacklist-row">
-                <div class="control-group blacklist-group">
-                    <label>🚫 黑名单设置：</label>
-                    <div class="blacklist-container">
-                        <div class="blacklist-input-container">
-                            <input type="text" id="blacklistInput" placeholder="输入要屏蔽的地址关键字，如：ad、banner、logo">
-                            <button id="addBlacklistBtn" class="btn-small">添加</button>
-                        </div>
-                        <div id="blacklistTags" class="blacklist-tags"></div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 白名单设置 -->
-            <div class="control-row whitelist-row" style="display: none;">
-                <div class="control-group whitelist-group">
-                    <label>✅ 白名单设置：</label>
-                    <div class="whitelist-container">
-                        <div class="whitelist-input-container">
-                            <input type="text" id="whitelistInput" placeholder="输入要放行的地址关键字，如：photo、image、pic">
-                            <button id="addWhitelistBtn" class="btn-small">添加</button>
-                        </div>
-                        <div id="whitelistTags" class="whitelist-tags"></div>
-                    </div>
-                </div>
-            </div>
+            <!-- 过滤模式与黑名单已移除 -->
         </div>
         <!-- 尺寸快速筛选 -->
         <div id="sizeTagsContainer" class="size-tags-container" style="display: none;">

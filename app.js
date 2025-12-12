@@ -7,6 +7,9 @@ let autoExtractInterval = null;
 // let lastImageCount = 0; // 未使用的变量，已移除
 let lastClickedIndex = -1; // 用于Shift范围选择
 let activeSizeFilters = new Set(); // 当前激活的尺寸筛选（支持多选）
+let sizeFilterUserCleared = false; // 用户是否主动清空尺寸筛选（避免自动回填）
+let sizeFilterUserModified = false; // 用户是否手动改过尺寸筛选（避免自动回填覆盖）
+let lastSizeSet = new Set(); // 上一次尺寸集合，用于检测是否全选过
 
 // 网络请求监听相关
 let networkMonitoringEnabled = false;
@@ -25,9 +28,6 @@ const tabSelect = document.getElementById('tabSelect');
 const refreshTabsBtn = document.getElementById('refreshTabsBtn');
 const sortSelect = document.getElementById('sortSelect');
 const filterSelect = document.getElementById('filterSelect');
-const minWidthInput = document.getElementById('minWidth');
-const minHeightInput = document.getElementById('minHeight');
-const applyFilterBtn = document.getElementById('applyFilter');
 const selectAllBtn = document.getElementById('selectAllBtn');
 const deselectAllBtn = document.getElementById('deselectAllBtn');
 const invertSelectionBtn = document.getElementById('invertSelectionBtn');
@@ -49,7 +49,7 @@ const blacklistInput = document.getElementById('blacklistInput');
 const addBlacklistBtn = document.getElementById('addBlacklistBtn');
 const blacklistTags = document.getElementById('blacklistTags');
 
-// 白名单相关DOM元素
+// 白名单相关DOM元素（已隐藏）
 const whitelistInput = document.getElementById('whitelistInput');
 const addWhitelistBtn = document.getElementById('addWhitelistBtn');
 const whitelistTags = document.getElementById('whitelistTags');
@@ -59,10 +59,10 @@ const blacklistRow = document.querySelector('.blacklist-row');
 // 初始化
 async function init() {
     loadSizeFilterState(); // 加载保存的尺寸筛选状态
-    loadBlacklistState(); // 加载黑名单状态
-    loadWhitelistState(); // 加载白名单状态
-    loadFilterModeState(); // 加载过滤模式状态
+    // 过滤模式与黑名单已移除
+
     setupEventListeners();
+    setupTabUpdateWatcher(); // 监听标签页导航完成后自动重新提取
     setupNetworkMonitoring(); // 设置网络请求监听
 
     // 默认开启自动持续提取和网络请求监听
@@ -78,53 +78,20 @@ async function init() {
 
 // 设置事件监听
 function setupEventListeners() {
+    tabSelect.addEventListener('change', handleTabChange);
     refreshTabsBtn.addEventListener('click', loadAvailableTabs);
     sortSelect.addEventListener('change', applyFiltersAndSort);
     filterSelect.addEventListener('change', applyFiltersAndSort);
-    applyFilterBtn.addEventListener('click', applyFiltersAndSort);
+    clearSizeFilterBtn.addEventListener('click', clearSizeFilter);
+    selectAllSizesBtn.addEventListener('click', selectAllSizes);
+    deselectAllSizesBtn.addEventListener('click', deselectAllSizes);
     selectAllBtn.addEventListener('click', selectAll);
     deselectAllBtn.addEventListener('click', deselectAll);
     invertSelectionBtn.addEventListener('click', invertSelection);
     downloadSelectedBtn.addEventListener('click', downloadSelected);
     clearBtn.addEventListener('click', clearAll);
-    clearSizeFilterBtn.addEventListener('click', clearSizeFilter);
-    selectAllSizesBtn.addEventListener('click', selectAllSizes);
-    deselectAllSizesBtn.addEventListener('click', deselectAllSizes);
+    // 黑白名单已移除，无需事件绑定
 
-    // 黑名单事件监听
-    addBlacklistBtn.addEventListener('click', addBlacklistKeyword);
-    blacklistInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-            addBlacklistKeyword();
-        }
-    });
-
-    // 白名单事件监听
-    addWhitelistBtn.addEventListener('click', addWhitelistKeyword);
-    whitelistInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-            addWhitelistKeyword();
-        }
-    });
-
-    // 过滤模式切换事件监听
-    const filterModeRadios = document.querySelectorAll('input[name="filterMode"]');
-    filterModeRadios.forEach(radio => {
-        radio.addEventListener('change', (e) => {
-            filterMode = e.target.value;
-            saveFilterModeState();
-            toggleFilterModeUI();
-            applyFiltersAndSort(); // 重新筛选
-        });
-    });
-
-    minWidthInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') applyFiltersAndSort();
-    });
-
-    minHeightInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') applyFiltersAndSort();
-    });
 }
 
 // 自动提取功能（默认开启）
@@ -167,16 +134,21 @@ function startAutoExtract() {
                 function: extractImagesFromPage
             });
 
-            const newImages = results[0].result || [];
+            const newImages = (results[0].result || []).map(img => ({
+                ...img,
+                tabId: selectedTabId
+            }));
             await loadImageDimensions(newImages);
 
             // 检查是否有新图片
-            const existingUrls = new Set(allImages.map(img => img.url));
+            const existingUrls = new Set(allImages.map(img => getDedupKeyFromUrl(img.url, img.tabId)));
             let newCount = 0;
 
             newImages.forEach(img => {
-                if (!existingUrls.has(img.url)) {
+                const key = getDedupKeyFromUrl(img.url, img.tabId);
+                if (!existingUrls.has(key)) {
                     allImages.push(img);
+                    existingUrls.add(key);
                     newCount++;
                 }
             });
@@ -282,6 +254,41 @@ async function loadAvailableTabs() {
     }
 }
 
+// 切换目标标签页
+async function handleTabChange() {
+    const newTabId = parseInt(tabSelect.value) || null;
+
+    // 停止现有自动提取
+    stopAutoExtract();
+
+    // 清空旧数据，防止跨标签残留
+    allImages = [];
+    filteredImages = [];
+    selectedImages.clear();
+    lastClickedIndex = -1;
+
+    // 重置尺寸筛选状态（已隐藏）
+    activeSizeFilters.clear();
+    sizeFilterUserCleared = false; // 新标签默认可自动全选
+    sizeFilterUserModified = false;
+    saveSizeFilterState();
+    sizeTagsContainer.style.display = 'none';
+    clearSizeFilterBtn.style.display = 'none';
+
+    currentTabId = newTabId;
+
+    // 先清空界面
+    renderImages(0);
+
+    if (!currentTabId) {
+        return;
+    }
+
+    // 重新提取并开启自动提取
+    await extractImagesFromCurrentTab();
+    enableAutoExtract();
+}
+
 // 从当前选中的标签页提取图片
 async function extractImagesFromCurrentTab() {
     const selectedTabId = parseInt(tabSelect.value);
@@ -313,23 +320,26 @@ async function extractImagesFromCurrentTab() {
             function: extractImagesFromPage
         });
 
-        const newImages = results[0].result || [];
+        const newImages = (results[0].result || []).map(img => ({
+            ...img,
+            tabId: selectedTabId
+        }));
 
         // 等待图片加载完成后获取尺寸信息
         await loadImageDimensions(newImages);
 
-        // 添加到现有图片列表（不重复）
-        const existingKeys = new Set(allImages.map(img => getDedupKeyFromUrl(img.url)));
-        newImages.forEach(img => {
-            const key = getDedupKeyFromUrl(img.url);
-            if (!existingKeys.has(key)) {
-                allImages.push(img);
-                existingKeys.add(key);
-            }
-        });
+    // 添加到现有图片列表（不重复）
+    const existingKeys = new Set(allImages.map(img => getDedupKeyFromUrl(img.url, img.tabId)));
+    newImages.forEach(img => {
+        const key = getDedupKeyFromUrl(img.url, img.tabId);
+        if (!existingKeys.has(key)) {
+            allImages.push(img);
+            existingKeys.add(key);
+        }
+    });
 
-        // 应用筛选和排序
-        applyFiltersAndSort();
+    // 应用筛选和排序
+    applyFiltersAndSort();
 
         // 恢复之前选中的图片
         selectedImages.clear();
@@ -521,112 +531,100 @@ async function loadImageDimensions(images) {
 
 // 应用筛选和排序
 function applyFiltersAndSort() {
+    if (!currentTabId) {
+        filteredImages = [];
+        renderImages(0);
+        return;
+    }
+
     // 先进行去重
     const hasDuplicates = removeDuplicateImages();
     if (hasDuplicates) {
         console.log('检测到重复图片，已自动去重');
     }
 
-    const minWidth = parseInt(minWidthInput.value) || 0;
-    const minHeight = parseInt(minHeightInput.value) || 0;
     const filterType = filterSelect.value;
     const sortType = sortSelect.value;
 
+    // 仅处理当前标签页的图片
+    const currentTabImages = allImages.filter(img => img.tabId === currentTabId);
+
+    // 预先收集当前页的尺寸集合，用于自动补全筛选
+    const currentSizes = new Set();
+    currentTabImages.forEach(img => {
+        if (img.width > 0 && img.height > 0) {
+            currentSizes.add(`${Math.round(img.width)}×${Math.round(img.height)}`);
+        }
+    });
+
+    // 若用户未主动清空，且未手动修改过筛选，则自动将当前页出现的尺寸加入筛选（确保新尺寸不会被挡住）
+    if (!sizeFilterUserCleared && !sizeFilterUserModified) {
+        let added = false;
+        currentSizes.forEach(size => {
+            if (!activeSizeFilters.has(size)) {
+                activeSizeFilters.add(size);
+                added = true;
+            }
+        });
+        if (added) {
+            saveSizeFilterState();
+        }
+    }
+
     // 筛选
-    filteredImages = allImages.filter(img => {
-        // 过滤模式筛选
-        if (filterMode === 'blacklist') {
-            // 黑名单模式：排除黑名单中的图片
-            if (isBlacklisted(img.url)) {
-                return false;
-            }
-        } else if (filterMode === 'whitelist') {
-            // 白名单模式：只显示白名单中的图片
-            if (!isWhitelisted(img.url)) {
-                return false;
-            }
-        }
-
-        if (img.width < minWidth || img.height < minHeight) {
-            return false;
-        }
-
+    filteredImages = currentTabImages.filter(img => {
         if (filterType !== 'all' && img.type !== filterType) {
             return false;
         }
 
-        // 尺寸筛选逻辑
-        // 如果尺寸筛选容器是显示的（说明有尺寸数据），则必须通过尺寸筛选
-        if (sizeTagsContainer.style.display !== 'none') {
-            // 确保尺寸为整数进行比较
+        // 尺寸筛选
+        // 如果用户主动清空且无选中尺寸，则不显示任何图片
+        if (sizeFilterUserCleared && activeSizeFilters.size === 0) return false;
+        // 正常情况：仅当有选中尺寸时限制
+        if (activeSizeFilters.size > 0) {
             const width = Math.round(img.width);
             const height = Math.round(img.height);
             const imgSize = `${width}×${height}`;
-            const isInFilter = activeSizeFilters.has(imgSize);
-            if (!isInFilter) {
-                return false;
-            }
+            if (!activeSizeFilters.has(imgSize)) return false;
         }
 
         return true;
     });
 
-    // 排序
+    // 排序（宽高缺失时按0处理，避免排序无效）
+    const toNumber = (n) => Number.isFinite(n) ? n : 0;
     if (sortType === 'size-desc') {
-        filteredImages.sort((a, b) => (b.width * b.height) - (a.width * a.height));
+        filteredImages.sort((a, b) => (toNumber(b.width) * toNumber(b.height)) - (toNumber(a.width) * toNumber(a.height)));
     } else if (sortType === 'size-asc') {
-        filteredImages.sort((a, b) => (a.width * a.height) - (b.width * b.height));
+        filteredImages.sort((a, b) => (toNumber(a.width) * toNumber(a.height)) - (toNumber(b.width) * toNumber(b.height)));
     } else if (sortType === 'width-desc') {
-        filteredImages.sort((a, b) => b.width - a.width);
+        filteredImages.sort((a, b) => toNumber(b.width) - toNumber(a.width));
     } else if (sortType === 'height-desc') {
-        filteredImages.sort((a, b) => b.height - a.height);
+        filteredImages.sort((a, b) => toNumber(b.height) - toNumber(a.height));
     }
 
-    // 生成尺寸标签
-    generateSizeTags();
+    // 生成尺寸标签（仅基于当前标签页的图片），同时记录当前尺寸集合
+    generateSizeTags(currentTabImages, currentSizes);
 
-    // 如果有尺寸筛选，将选中的尺寸图片排在最前面
+    // 尺寸筛选排序优先：将选中的尺寸排前
     if (activeSizeFilters.size > 0) {
-        // 获取尺寸标签的显示顺序
         const sizeOrder = getSizeDisplayOrder();
-        console.log('尺寸标签顺序:', sizeOrder);
-        console.log('选中的尺寸:', Array.from(activeSizeFilters));
-
         filteredImages.sort((a, b) => {
             const aSize = `${Math.round(a.width)}×${Math.round(a.height)}`;
             const bSize = `${Math.round(b.width)}×${Math.round(b.height)}`;
-            const aSelected = activeSizeFilters.has(aSize);
-            const bSelected = activeSizeFilters.has(bSize);
-
-            // 选中的尺寸排在最前面
-            if (aSelected !== bSelected) {
-                return bSelected - aSelected;
-            }
-
-            // 如果都是选中，按照尺寸标签的显示顺序排序
-            if (aSelected && bSelected) {
-                const aIndex = sizeOrder.indexOf(aSize);
-                const bIndex = sizeOrder.indexOf(bSize);
-
-                // 如果两个尺寸都在标签中，按标签顺序排序
-                if (aIndex !== -1 && bIndex !== -1) {
-                    return aIndex - bIndex;
-                }
-
-                // 如果只有一个在标签中，标签中的排在前面
-                if (aIndex !== -1 && bIndex === -1) return -1;
-                if (aIndex === -1 && bIndex !== -1) return 1;
-
-                // 如果都不在标签中，按面积排序
-                return (b.width * b.height) - (a.width * a.height);
-            }
-
-            // 如果都未选中，按原来的排序规则
+            const aSel = activeSizeFilters.has(aSize);
+            const bSel = activeSizeFilters.has(bSize);
+            if (aSel !== bSel) return bSel - aSel;
+            const aIdx = sizeOrder.indexOf(aSize);
+            const bIdx = sizeOrder.indexOf(bSize);
+            if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
+            if (aIdx !== -1) return -1;
+            if (bIdx !== -1) return 1;
             return 0;
         });
     }
 
-    renderImages();
+    renderImages(currentTabImages.length);
 }
 
 // 获取尺寸标签的显示顺序
@@ -643,11 +641,11 @@ function getSizeDisplayOrder() {
 }
 
 // 生成尺寸标签
-function generateSizeTags() {
+function generateSizeTags(sourceImages = [], presetSizes = null) {
     // 统计每个尺寸的数量
     const sizeCount = {};
 
-    allImages.forEach(img => {
+    sourceImages.forEach(img => {
         // 跳过无效尺寸
         if (img.width === 0 || img.height === 0) return;
 
@@ -692,21 +690,17 @@ function generateSizeTags() {
     // 显示容器
     sizeTagsContainer.style.display = 'block';
 
-    // 不默认全选，让用户主动选择尺寸进行筛选
-    // 当activeSizeFilters.size === 0时，不显示任何图片（全不选状态）
-    // 当activeSizeFilters.size > 0时，只显示选中的尺寸
+    // 当前尺寸列表（如调用方已计算则复用）
+    const currentSizes = presetSizes ? Array.from(presetSizes) : sortedSizes.map(([size]) => size);
 
-    // 生成标签
+    // 生成标签（根据当前选中状态渲染）
     sortedSizes.forEach(([size, count]) => {
         const tag = document.createElement('button');
         tag.className = 'size-tag';
         tag.dataset.size = size;
-
-        // 根据当前筛选状态设置标签状态
         if (activeSizeFilters.has(size)) {
             tag.classList.add('active');
         }
-
         tag.innerHTML = `
       <span>${size}</span>
       <span class="count">${count}</span>
@@ -717,6 +711,9 @@ function generateSizeTags() {
 
     // 更新清除按钮显示状态
     updateSizeFilterButtons();
+
+    // 记录本次尺寸集合，用于后续判断是否需要自动加入新尺寸
+    lastSizeSet = new Set(currentSizes);
 }
 
 // 切换尺寸筛选（多选模式）
@@ -732,6 +729,9 @@ function toggleSizeFilter(size) {
         activeSizeFilters.add(size);
         tag.classList.add('active');
     }
+
+    sizeFilterUserModified = true;
+    sizeFilterUserCleared = activeSizeFilters.size === 0;
 
     // 保存选择状态
     saveSizeFilterState();
@@ -764,15 +764,22 @@ function loadSizeFilterState() {
             const state = JSON.parse(saved);
             activeSizeFilters = new Set(state);
             console.log('加载保存的尺寸筛选状态:', Array.from(activeSizeFilters));
+            // 只有用户点击“全不选”或“清除”时才设为true，加载时默认允许自动全选
+            sizeFilterUserCleared = false;
+            sizeFilterUserModified = false;
         } else {
             // 没有保存的状态时，清空筛选（显示所有图片）
             activeSizeFilters.clear();
+            sizeFilterUserCleared = false;
+            sizeFilterUserModified = false;
             console.log('没有保存的尺寸筛选状态，显示所有图片');
         }
     } catch (error) {
         console.error('加载尺寸筛选状态失败:', error);
         // 出错时也清空筛选
         activeSizeFilters.clear();
+        sizeFilterUserCleared = false;
+        sizeFilterUserModified = false;
     }
 }
 
@@ -785,6 +792,8 @@ function selectAllSizes() {
         tag.classList.add('active');
     });
 
+    sizeFilterUserCleared = false;
+    sizeFilterUserModified = false; // 全选后允许自动补充新尺寸
     saveSizeFilterState();
     updateSizeFilterButtons();
     applyFiltersAndSort();
@@ -794,6 +803,8 @@ function selectAllSizes() {
 // 全不选（清除所有尺寸筛选）
 function deselectAllSizes() {
     activeSizeFilters.clear();
+    sizeFilterUserCleared = true;
+    sizeFilterUserModified = true;
 
     // 更新UI状态
     const allSizeTags = sizeTags.querySelectorAll('.size-tag');
@@ -821,6 +832,8 @@ function updateSizeFilterButtons() {
 // 清除尺寸筛选（保留用于清除按钮）
 function clearSizeFilter() {
     activeSizeFilters.clear();
+    sizeFilterUserCleared = true;
+    sizeFilterUserModified = true;
     saveSizeFilterState();
     updateSizeFilterButtons();
     applyFiltersAndSort();
@@ -877,17 +890,16 @@ function hideSize(size) {
 }
 
 // 渲染图片网格
-function renderImages() {
+function renderImages(totalImagesInTab = filteredImages.length) {
     imageGrid.innerHTML = '';
 
     // 清理不存在的选中项
     const validIndices = new Set(filteredImages.map((_, i) => i));
     selectedImages = new Set([...selectedImages].filter(i => validIndices.has(i)));
 
-    if (filteredImages.length === 0 && allImages.length > 0) {
-        // 检查是否是全不选状态
-        if (sizeTagsContainer.style.display !== 'none' && activeSizeFilters.size === 0) {
-            imageGrid.innerHTML = '<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: #6c757d;">请选择尺寸进行筛选</div>';
+    if (filteredImages.length === 0 && totalImagesInTab > 0) {
+        if (sizeFilterUserCleared && activeSizeFilters.size === 0) {
+            imageGrid.innerHTML = '<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: #6c757d;">尺寸已全不选，当前不显示图片</div>';
         } else {
             imageGrid.innerHTML = '<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: #6c757d;">没有符合筛选条件的图片</div>';
         }
@@ -899,6 +911,9 @@ function renderImages() {
         const item = document.createElement('div');
         item.className = 'image-item';
         item.dataset.index = index;
+        if (selectedImages.has(index)) {
+            item.classList.add('selected');
+        }
 
         const typeClass = `type-${img.type}`;
         const typeName = {
@@ -1394,24 +1409,51 @@ function setupNetworkMonitoring() {
 
             // 处理所有拦截到的图片，不限制标签页
             console.log('处理拦截到的图片:', request.data.url);
-            handleNewInterceptedImage(request.data.url);
+            handleNewInterceptedImage(request.data.url, request.data.tabId || sender.tab?.id || currentTabId);
         }
     });
     console.log('网络监听设置完成');
 }
 
+// 监听标签页导航完成，自动重新提取并重启监听
+function setupTabUpdateWatcher() {
+    let tabUpdateTimer = null;
+    chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+        if (tabId !== currentTabId) return;
+        if (changeInfo.status === 'complete') {
+            // 防抖，避免同一加载过程多次触发
+            if (tabUpdateTimer) clearTimeout(tabUpdateTimer);
+            tabUpdateTimer = setTimeout(async () => {
+                console.log('检测到当前标签页刷新/跳转，重新提取并启动监听');
+                await extractImagesFromCurrentTab();
+                await startNetworkMonitoring();
+                enableAutoExtract();
+            }, 500);
+        }
+    });
+}
+
 // 处理新拦截到的图片
-async function handleNewInterceptedImage(url) {
+async function handleNewInterceptedImage(url, tabId) {
+    let dedupKey = null;
     try {
+        const targetTabId = tabId || currentTabId;
+
+        // 没有标签页时不处理，防止 undefined 报错
+        if (!targetTabId) {
+            console.log('未指定标签页，忽略拦截图片:', url);
+            return;
+        }
+
         // 防止重复处理
-        const dedupKey = getDedupKeyFromUrl(url);
+        dedupKey = getDedupKeyFromUrl(url, targetTabId);
         if (processingImages.has(dedupKey)) {
             console.log('图片正在处理中，跳过:', url);
             return;
         }
 
         // 检查是否已存在
-        const existingKeys = new Set(allImages.map(img => getDedupKeyFromUrl(img.url)));
+        const existingKeys = new Set(allImages.map(img => getDedupKeyFromUrl(img.url, img.tabId)));
         if (existingKeys.has(dedupKey)) {
             console.log('图片已存在，跳过:', url);
             return;
@@ -1444,6 +1486,7 @@ async function handleNewInterceptedImage(url) {
         const img = {
             url: url,
             type: 'network_request',
+            tabId: targetTabId,
             width: 0,
             height: 0,
             alt: ''
@@ -1469,33 +1512,18 @@ async function handleNewInterceptedImage(url) {
         // 静默更新，不显示通知，避免频繁刷新
         applyFiltersAndSort();
 
-        // 恢复之前选中的图片（基于URL）
-        selectedImages.clear();
-        filteredImages.forEach((img, index) => {
-            if (selectedUrls.has(img.url)) {
-                selectedImages.add(index);
-            }
-        });
-
-        // 更新UI显示选中状态
-        document.querySelectorAll('.image-item').forEach((item, index) => {
-            if (selectedImages.has(index)) {
-                item.classList.add('selected');
-            } else {
-                item.classList.remove('selected');
-            }
-        });
-
         // 只在第一次添加时显示通知
-        if (allImages.length <= 1) {
+        if (targetTabId === currentTabId && allImages.filter(img => img.tabId === currentTabId).length <= 1) {
             showNotification(`网络监听发现新图片: ${url}`, 'success');
         }
-        console.log('当前图片总数:', allImages.length);
+        console.log('当前图片总数（全部标签）:', allImages.length);
     } catch (error) {
         console.error('处理拦截图片失败:', error);
     } finally {
         // 清理处理状态
-        processingImages.delete(dedupKey);
+        if (dedupKey) {
+            processingImages.delete(dedupKey);
+        }
     }
 }
 
