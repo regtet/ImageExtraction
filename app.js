@@ -80,8 +80,19 @@ async function init() {
 function setupEventListeners() {
     tabSelect.addEventListener('change', handleTabChange);
     refreshTabsBtn.addEventListener('click', loadAvailableTabs);
-    sortSelect.addEventListener('change', applyFiltersAndSort);
-    filterSelect.addEventListener('change', applyFiltersAndSort);
+    // 使用防抖处理排序和筛选，避免频繁刷新导致UI抖动
+    sortSelect.addEventListener('change', () => {
+        if (applyFiltersAndSortTimer) clearTimeout(applyFiltersAndSortTimer);
+        applyFiltersAndSortTimer = setTimeout(() => {
+            applyFiltersAndSort();
+        }, 100);
+    });
+    filterSelect.addEventListener('change', () => {
+        if (applyFiltersAndSortTimer) clearTimeout(applyFiltersAndSortTimer);
+        applyFiltersAndSortTimer = setTimeout(() => {
+            applyFiltersAndSort();
+        }, 100);
+    });
     clearSizeFilterBtn.addEventListener('click', clearSizeFilter);
     selectAllSizesBtn.addEventListener('click', selectAllSizes);
     deselectAllSizesBtn.addEventListener('click', deselectAllSizes);
@@ -140,22 +151,28 @@ function startAutoExtract() {
             }));
             await loadImageDimensions(newImages);
 
-            // 检查是否有新图片
-            const existingUrls = new Set(allImages.map(img => getDedupKeyFromUrl(img.url, img.tabId)));
+            // 检查是否有新图片（使用URL+tabId作为唯一标识）
+            const existingKeys = new Set(allImages.map(img => getDedupKeyFromUrl(img.url, img.tabId)));
             let newCount = 0;
 
             newImages.forEach(img => {
                 const key = getDedupKeyFromUrl(img.url, img.tabId);
-                if (!existingUrls.has(key)) {
+                if (!existingKeys.has(key)) {
                     allImages.push(img);
-                    existingUrls.add(key);
+                    existingKeys.add(key);
                     newCount++;
                 }
             });
 
+            // 如果添加了新图片，立即进行去重检查（防止并发添加导致的重复）
             if (newCount > 0) {
-                applyFiltersAndSort();
-                showNotification(`发现 ${newCount} 张新图片！总共 ${allImages.length} 张`, 'success');
+                removeDuplicateImages();
+                // 使用防抖，避免频繁刷新导致UI抖动
+                if (applyFiltersAndSortTimer) clearTimeout(applyFiltersAndSortTimer);
+                applyFiltersAndSortTimer = setTimeout(() => {
+                    applyFiltersAndSort();
+                    showNotification(`发现 ${newCount} 张新图片！总共 ${allImages.length} 张`, 'success');
+                }, 200);
             }
         } catch (error) {
             console.error('自动提取失败:', error);
@@ -306,11 +323,14 @@ async function extractImagesFromCurrentTab() {
 
         currentTabId = selectedTabId;
 
-        // 保存当前选中的图片索引（基于URL）
-        const selectedUrls = new Set();
+        // 保存当前选中的图片标识（基于URL+tabId，更可靠）
+        const selectedKeys = new Set();
         selectedImages.forEach(index => {
             if (filteredImages[index]) {
-                selectedUrls.add(filteredImages[index].url);
+                const img = filteredImages[index];
+                // 使用URL+tabId作为唯一标识，避免相同URL在不同位置的混淆
+                const key = getDedupKeyFromUrl(img.url, img.tabId);
+                selectedKeys.add(key);
             }
         });
 
@@ -328,23 +348,31 @@ async function extractImagesFromCurrentTab() {
         // 等待图片加载完成后获取尺寸信息
         await loadImageDimensions(newImages);
 
-    // 添加到现有图片列表（不重复）
-    const existingKeys = new Set(allImages.map(img => getDedupKeyFromUrl(img.url, img.tabId)));
-    newImages.forEach(img => {
-        const key = getDedupKeyFromUrl(img.url, img.tabId);
-        if (!existingKeys.has(key)) {
-            allImages.push(img);
-            existingKeys.add(key);
+        // 添加到现有图片列表（不重复，使用URL+tabId作为唯一标识）
+        const existingKeys = new Set(allImages.map(img => getDedupKeyFromUrl(img.url, img.tabId)));
+        let addedCount = 0;
+        newImages.forEach(img => {
+            const key = getDedupKeyFromUrl(img.url, img.tabId);
+            if (!existingKeys.has(key)) {
+                allImages.push(img);
+                existingKeys.add(key);
+                addedCount++;
+            }
+        });
+
+        // 如果添加了新图片，立即进行去重检查（防止并发添加导致的重复）
+        if (addedCount > 0) {
+            removeDuplicateImages();
         }
-    });
 
-    // 应用筛选和排序
-    applyFiltersAndSort();
+        // 应用筛选和排序
+        applyFiltersAndSort();
 
-        // 恢复之前选中的图片
+        // 恢复之前选中的图片（使用URL+tabId匹配，更准确）
         selectedImages.clear();
         filteredImages.forEach((img, index) => {
-            if (selectedUrls.has(img.url)) {
+            const key = getDedupKeyFromUrl(img.url, img.tabId);
+            if (selectedKeys.has(key)) {
                 selectedImages.add(index);
             }
         });
@@ -529,6 +557,9 @@ async function loadImageDimensions(images) {
     await Promise.all(promises);
 }
 
+// 防抖定时器
+let applyFiltersAndSortTimer = null;
+
 // 应用筛选和排序
 function applyFiltersAndSort() {
     if (!currentTabId) {
@@ -537,7 +568,17 @@ function applyFiltersAndSort() {
         return;
     }
 
-    // 先进行去重
+    // 保存当前选中的图片标识（基于URL+tabId，在排序前保存）
+    const selectedKeys = new Set();
+    selectedImages.forEach(index => {
+        if (filteredImages[index]) {
+            const img = filteredImages[index];
+            const key = getDedupKeyFromUrl(img.url, img.tabId);
+            selectedKeys.add(key);
+        }
+    });
+
+    // 先进行去重（每次筛选前都去重，确保没有重复）
     const hasDuplicates = removeDuplicateImages();
     if (hasDuplicates) {
         console.log('检测到重复图片，已自动去重');
@@ -557,10 +598,47 @@ function applyFiltersAndSort() {
         }
     });
 
-    // 若用户未主动清空，且未手动修改过筛选，则自动将当前页出现的尺寸加入筛选（确保新尺寸不会被挡住）
+    // 若用户未主动清空，且未手动修改过筛选，则自动将当前页出现的尺寸加入筛选
+    // 但只自动添加数量最多的前10个尺寸，避免自动选中太多尺寸
     if (!sizeFilterUserCleared && !sizeFilterUserModified) {
+        // 统计每个尺寸的数量
+        const sizeCountMap = {};
+        currentTabImages.forEach(img => {
+            if (img.width > 0 && img.height > 0) {
+                const size = `${Math.round(img.width)}×${Math.round(img.height)}`;
+                sizeCountMap[size] = (sizeCountMap[size] || 0) + 1;
+            }
+        });
+
+        // 统计小尺寸数量
+        let smallCount = 0;
+        const regularSizes = {};
+        Object.entries(sizeCountMap).forEach(([size, count]) => {
+            const [wStr, hStr] = size.split('×');
+            const w = parseInt(wStr, 10) || 0;
+            const h = parseInt(hStr, 10) || 0;
+            if (w <= 100 && h <= 100) {
+                smallCount += count;
+            } else {
+                regularSizes[size] = count;
+            }
+        });
+
+        // 按数量排序，只自动添加前10个数量最多的尺寸（不包括小尺寸）
+        const sortedByCount = Object.entries(regularSizes)
+            .sort((a, b) => b[1] - a[1]) // 按数量从多到少排序
+            .slice(0, 10) // 只取前10个
+            .map(([size]) => size);
+
         let added = false;
-        currentSizes.forEach(size => {
+        // 如果小尺寸数量较多，也自动添加
+        if (smallCount > 0) {
+            if (!activeSizeFilters.has('small')) {
+                activeSizeFilters.add('small');
+                added = true;
+            }
+        }
+        sortedByCount.forEach(size => {
             if (!activeSizeFilters.has(size)) {
                 activeSizeFilters.add(size);
                 added = true;
@@ -585,44 +663,82 @@ function applyFiltersAndSort() {
             const width = Math.round(img.width);
             const height = Math.round(img.height);
             const imgSize = `${width}×${height}`;
-            if (!activeSizeFilters.has(imgSize)) return false;
+
+            // 检查是否匹配选中的尺寸
+            let matched = activeSizeFilters.has(imgSize);
+
+            // 如果没匹配，检查是否是小尺寸（100×100以内）且选中了"小尺寸"选项
+            if (!matched && width <= 100 && height <= 100 && activeSizeFilters.has('small')) {
+                matched = true;
+            }
+
+            if (!matched) return false;
         }
 
         return true;
     });
 
-    // 排序（宽高缺失时按0处理，避免排序无效）
-    const toNumber = (n) => Number.isFinite(n) ? n : 0;
-    if (sortType === 'size-desc') {
-        filteredImages.sort((a, b) => (toNumber(b.width) * toNumber(b.height)) - (toNumber(a.width) * toNumber(a.height)));
-    } else if (sortType === 'size-asc') {
-        filteredImages.sort((a, b) => (toNumber(a.width) * toNumber(a.height)) - (toNumber(b.width) * toNumber(b.height)));
-    } else if (sortType === 'width-desc') {
-        filteredImages.sort((a, b) => toNumber(b.width) - toNumber(a.width));
-    } else if (sortType === 'height-desc') {
-        filteredImages.sort((a, b) => toNumber(b.height) - toNumber(a.height));
-    }
-
     // 生成尺寸标签（仅基于当前标签页的图片），同时记录当前尺寸集合
     generateSizeTags(currentTabImages, currentSizes);
 
-    // 尺寸筛选排序优先：将选中的尺寸排前
-    if (activeSizeFilters.size > 0) {
-        const sizeOrder = getSizeDisplayOrder();
-        filteredImages.sort((a, b) => {
-            const aSize = `${Math.round(a.width)}×${Math.round(a.height)}`;
-            const bSize = `${Math.round(b.width)}×${Math.round(b.height)}`;
+    // 排序：用户选择的排序方式作为主要排序，尺寸筛选排序作为次要排序
+    const toNumber = (n) => Number.isFinite(n) ? n : 0;
+    const sizeOrder = activeSizeFilters.size > 0 ? getSizeDisplayOrder() : [];
+
+    filteredImages.sort((a, b) => {
+        // 主要排序：用户选择的排序方式
+        let primaryResult = 0;
+        if (sortType === 'size-desc') {
+            primaryResult = (toNumber(b.width) * toNumber(b.height)) - (toNumber(a.width) * toNumber(a.height));
+        } else if (sortType === 'size-asc') {
+            primaryResult = (toNumber(a.width) * toNumber(a.height)) - (toNumber(b.width) * toNumber(b.height));
+        } else if (sortType === 'width-desc') {
+            primaryResult = toNumber(b.width) - toNumber(a.width);
+        } else if (sortType === 'height-desc') {
+            primaryResult = toNumber(b.height) - toNumber(a.height);
+        }
+
+        // 如果主要排序结果不同，直接返回
+        if (primaryResult !== 0) {
+            return primaryResult;
+        }
+
+        // 主要排序结果相同（或未设置排序），使用尺寸筛选排序作为次要排序
+        if (activeSizeFilters.size > 0 && sizeOrder.length > 0) {
+            const aWidth = Math.round(a.width);
+            const aHeight = Math.round(a.height);
+            const bWidth = Math.round(b.width);
+            const bHeight = Math.round(b.height);
+
+            // 判断是否是小尺寸
+            const aIsSmall = aWidth <= 100 && aHeight <= 100;
+            const bIsSmall = bWidth <= 100 && bHeight <= 100;
+
+            const aSize = aIsSmall ? 'small' : `${aWidth}×${aHeight}`;
+            const bSize = bIsSmall ? 'small' : `${bWidth}×${bHeight}`;
+
             const aSel = activeSizeFilters.has(aSize);
             const bSel = activeSizeFilters.has(bSize);
+
             if (aSel !== bSel) return bSel - aSel;
             const aIdx = sizeOrder.indexOf(aSize);
             const bIdx = sizeOrder.indexOf(bSize);
             if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
             if (aIdx !== -1) return -1;
             if (bIdx !== -1) return 1;
-            return 0;
-        });
-    }
+        }
+
+        return 0;
+    });
+
+    // 排序后恢复选中状态（基于URL+tabId匹配）
+    selectedImages.clear();
+    filteredImages.forEach((img, index) => {
+        const key = getDedupKeyFromUrl(img.url, img.tabId);
+        if (selectedKeys.has(key)) {
+            selectedImages.add(index);
+        }
+    });
 
     renderImages(currentTabImages.length);
 }
@@ -644,6 +760,8 @@ function getSizeDisplayOrder() {
 function generateSizeTags(sourceImages = [], presetSizes = null) {
     // 统计每个尺寸的数量
     const sizeCount = {};
+    const SMALL_SIZE_KEY = 'small'; // 小尺寸（100×100以内）的特殊标识
+    let smallSizeCount = 0; // 小尺寸的图片数量
 
     sourceImages.forEach(img => {
         // 跳过无效尺寸
@@ -652,37 +770,57 @@ function generateSizeTags(sourceImages = [], presetSizes = null) {
         // 确保尺寸为整数
         const width = Math.round(img.width);
         const height = Math.round(img.height);
-        const size = `${width}×${height}`;
-        sizeCount[size] = (sizeCount[size] || 0) + 1;
+
+        // 如果是100×100以内的小尺寸，合并到"小尺寸"选项
+        if (width <= 100 && height <= 100) {
+            smallSizeCount++;
+        } else {
+            // 大于100×100的尺寸正常统计
+            const size = `${width}×${height}`;
+            sizeCount[size] = (sizeCount[size] || 0) + 1;
+        }
     });
 
-    // 按选中状态优先，然后按面积从大到小排序
-    const sortedSizes = Object.entries(sizeCount)
+    // 如果有小尺寸图片，添加到统计中
+    if (smallSizeCount > 0) {
+        sizeCount[SMALL_SIZE_KEY] = smallSizeCount;
+    }
+
+    // 按选中状态优先，然后按数量从多到少排序（优先显示数量多的）
+    const allSizes = Object.entries(sizeCount)
         .map(([size, count]) => {
-            const [wStr, hStr] = size.split('×');
-            const w = parseInt(wStr, 10) || 0;
-            const h = parseInt(hStr, 10) || 0;
+            let area = 0;
+            // 处理小尺寸选项
+            if (size === SMALL_SIZE_KEY) {
+                area = 0; // 小尺寸面积设为0，排在最前面
+            } else {
+                const [wStr, hStr] = size.split('×');
+                const w = parseInt(wStr, 10) || 0;
+                const h = parseInt(hStr, 10) || 0;
+                area = w * h;
+            }
             const isSelected = activeSizeFilters.has(size);
-            return { size, count, area: w * h, isSelected };
+            return { size, count, area, isSelected };
         })
         .sort((a, b) => {
             // 选中的尺寸排在最前面
             if (a.isSelected !== b.isSelected) {
                 return b.isSelected - a.isSelected;
             }
-            // 然后按面积从大到小排序
-            if (b.area !== a.area) return b.area - a.area;
-            // 面积相同时按数量从多到少排序
+            // 小尺寸选项排在最前面（在未选中状态下）
+            if (a.size === SMALL_SIZE_KEY && b.size !== SMALL_SIZE_KEY) return -1;
+            if (a.size !== SMALL_SIZE_KEY && b.size === SMALL_SIZE_KEY) return 1;
+            // 然后按数量从多到少排序（优先显示数量多的尺寸）
             if (b.count !== a.count) return b.count - a.count;
+            // 数量相同时按面积从大到小排序
+            if (b.area !== a.area) return b.area - a.area;
             return 0;
-        })
-        .slice(0, 20) // 最多显示20个尺寸
-        .map(item => [item.size, item.count]);
+        });
 
     // 清空现有标签
     sizeTags.innerHTML = '';
 
-    if (sortedSizes.length === 0) {
+    if (allSizes.length === 0) {
         sizeTagsContainer.style.display = 'none';
         return;
     }
@@ -691,23 +829,45 @@ function generateSizeTags(sourceImages = [], presetSizes = null) {
     sizeTagsContainer.style.display = 'block';
 
     // 当前尺寸列表（如调用方已计算则复用）
-    const currentSizes = presetSizes ? Array.from(presetSizes) : sortedSizes.map(([size]) => size);
+    const currentSizes = presetSizes ? Array.from(presetSizes) : allSizes.map(item => item.size);
+
+    // 限制显示数量：优先显示选中的尺寸和数量多的尺寸
+    const MAX_DISPLAY = 30; // 最多显示30个尺寸
+    const selectedSizes = allSizes.filter(item => item.isSelected);
+    const unselectedSizes = allSizes.filter(item => !item.isSelected);
+
+    // 选中的尺寸全部显示，未选中的按数量排序后取前N个
+    const displaySizes = [
+        ...selectedSizes,
+        ...unselectedSizes.slice(0, MAX_DISPLAY - selectedSizes.length)
+    ];
 
     // 生成标签（根据当前选中状态渲染）
-    sortedSizes.forEach(([size, count]) => {
+    displaySizes.forEach(({ size, count }) => {
         const tag = document.createElement('button');
         tag.className = 'size-tag';
         tag.dataset.size = size;
         if (activeSizeFilters.has(size)) {
             tag.classList.add('active');
         }
+        // 小尺寸显示为"小尺寸(≤100×100)"
+        const displayName = size === SMALL_SIZE_KEY ? '小尺寸(≤100×100)' : size;
         tag.innerHTML = `
-      <span>${size}</span>
+      <span>${displayName}</span>
       <span class="count">${count}</span>
     `;
         tag.addEventListener('click', () => toggleSizeFilter(size));
         sizeTags.appendChild(tag);
     });
+
+    // 如果还有更多尺寸未显示，添加"显示更多"提示
+    if (allSizes.length > MAX_DISPLAY) {
+        const moreInfo = document.createElement('div');
+        moreInfo.className = 'size-tag-more';
+        moreInfo.style.cssText = 'padding: 8px 12px; color: #6c757d; font-size: 12px; text-align: center;';
+        moreInfo.textContent = `还有 ${allSizes.length - MAX_DISPLAY} 个尺寸未显示（已显示数量最多的 ${MAX_DISPLAY} 个）`;
+        sizeTags.appendChild(moreInfo);
+    }
 
     // 更新清除按钮显示状态
     updateSizeFilterButtons();
@@ -842,7 +1002,10 @@ function clearSizeFilter() {
 
 // 隐藏该尺寸（等同于点击上方对应尺寸标签）
 function hideThisImageSize(img) {
-    const size = `${Math.round(img.width)}×${Math.round(img.height)}`;
+    const width = Math.round(img.width);
+    const height = Math.round(img.height);
+    // 如果是小尺寸，使用"small"标识，否则使用具体尺寸
+    const size = (width <= 100 && height <= 100) ? 'small' : `${width}×${height}`;
     hideSize(size);
 }
 
@@ -1041,39 +1204,99 @@ function formatFileSize(bytes) {
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 }
 
-// 归一化图片URL用于去重（去掉查询参数与hash，转小写）
+// 归一化图片URL用于去重
+// 处理URL编码差异、空格等边缘情况，但保留查询参数
 function normalizeImageUrl(url) {
     try {
-        if (url.startsWith('data:')) return url; // base64 保持原样
-        const u = new URL(url);
-        return (u.origin + u.pathname).toLowerCase();
+        if (url.startsWith('data:')) {
+            // 对于base64图片，使用完整的data URL作为key（因为可能内容不同）
+            return url;
+        }
+
+        // 先解码URL，然后重新编码，统一编码格式
+        let normalized = decodeURIComponent(url);
+        // 去除首尾空格
+        normalized = normalized.trim();
+
+        // 尝试解析为URL对象，统一格式
+        try {
+            const u = new URL(normalized);
+            // 保留完整的URL（包括查询参数和hash），但统一编码
+            normalized = u.href;
+        } catch (e) {
+            // 如果无法解析为URL，使用原始值
+        }
+
+        // 转换为小写
+        return normalized.toLowerCase();
     } catch (e) {
-        return url.toLowerCase();
+        // URL解析失败，使用原始URL的小写形式（去除空格）
+        return url.trim().toLowerCase();
     }
 }
 
-function getDedupKeyFromUrl(url) {
-    return normalizeImageUrl(url);
+function getDedupKeyFromUrl(url, tabId = null) {
+    const normalizedUrl = normalizeImageUrl(url);
+    // 如果提供了tabId，将其包含在去重key中，避免不同标签页的相同URL被误判为重复
+    if (tabId !== null && tabId !== undefined) {
+        return `${normalizedUrl}::tab:${tabId}`;
+    }
+    return normalizedUrl;
 }
 
-// 去重函数 - 移除重复的图片
+// 去重函数 - 移除重复的图片（同一标签页内的重复）
 function removeDuplicateImages() {
-    const seenKeys = new Set();
+    const seenKeys = new Set(); // 基于完整URL的去重
+    const seenFileKeys = new Set(); // 基于文件名+尺寸+标签页的去重（更严格）
     const uniqueImages = [];
     let removedCount = 0;
+    const duplicateKeys = new Set(); // 记录重复的key，用于调试
 
-    allImages.forEach(img => {
-        const key = getDedupKeyFromUrl(img.url);
-        if (!seenKeys.has(key)) {
-            seenKeys.add(key);
-            uniqueImages.push(img);
-        } else {
-            removedCount++;
+    allImages.forEach((img, index) => {
+        // 主要去重：使用URL和tabId组合作为去重key
+        const key = getDedupKeyFromUrl(img.url, img.tabId);
+
+        // 辅助去重：基于文件名+尺寸+标签页（更严格，忽略查询参数）
+        let fileKey = null;
+        if (img.width > 0 && img.height > 0) {
+            try {
+                const fileName = getImageName(img.url);
+                // 使用文件名+尺寸+标签页作为去重key
+                fileKey = `${fileName}::${img.width}×${img.height}::tab:${img.tabId}`.toLowerCase();
+            } catch (e) {
+                // 获取文件名失败，跳过辅助去重
+            }
         }
+
+        // 检查是否重复
+        const isUrlDuplicate = seenKeys.has(key);
+        const isFileDuplicate = fileKey && seenFileKeys.has(fileKey);
+
+        if (isUrlDuplicate || isFileDuplicate) {
+            // 发现重复
+            removedCount++;
+            duplicateKeys.add(key);
+            if (isUrlDuplicate) {
+                console.log(`发现重复图片（基于URL） [索引${index}]: ${img.url.substring(0, 100)}... (tabId: ${img.tabId})`);
+            } else if (isFileDuplicate) {
+                console.log(`发现重复图片（基于文件名+尺寸） [索引${index}]: ${img.url.substring(0, 100)}... (tabId: ${img.tabId}, 文件名: ${getImageName(img.url)})`);
+            }
+            return; // 跳过这个图片
+        }
+
+        // 不是重复，添加到结果
+        seenKeys.add(key);
+        if (fileKey) {
+            seenFileKeys.add(fileKey);
+        }
+        uniqueImages.push(img);
     });
 
     if (removedCount > 0) {
-        console.log(`移除了 ${removedCount} 张重复图片`);
+        console.log(`移除了 ${removedCount} 张重复图片，重复的key数量: ${duplicateKeys.size}`);
+        if (duplicateKeys.size > 0) {
+            console.log('重复的key示例:', Array.from(duplicateKeys).slice(0, 5));
+        }
         allImages = uniqueImages;
         return true;
     }
@@ -1131,9 +1354,26 @@ function getImageFileSize(img) {
 }
 
 // 下载单张图片
-async function downloadImage(img, index) {
+async function downloadImage(img, index, timestamp = null) {
     try {
-        const filename = `image_${Date.now()}_${index}.${getImageExtension(img.url)}`;
+        // 如果没有提供时间戳，使用当前时间
+        const time = timestamp || Date.now();
+
+        // 尝试使用原始文件名，如果无法获取则使用默认名称
+        let filename;
+        try {
+            const imageName = getImageName(img.url);
+            // 如果文件名有效且不是默认名称，使用原始文件名
+            if (imageName && imageName !== '图片' && imageName !== 'Base64图片') {
+                // 清理文件名，移除非法字符
+                const cleanName = imageName.replace(/[<>:"/\\|?*]/g, '_');
+                filename = `${cleanName}`;
+            } else {
+                filename = `image_${time}_${index}.${getImageExtension(img.url)}`;
+            }
+        } catch (e) {
+            filename = `image_${time}_${index}.${getImageExtension(img.url)}`;
+        }
 
         if (img.url.startsWith('data:')) {
             downloadBase64Image(img.url, filename);
@@ -1146,7 +1386,7 @@ async function downloadImage(img, index) {
         }
     } catch (error) {
         console.error('下载失败:', error);
-        showNotification('下载失败，请重试', 'error');
+        throw error; // 抛出错误，让调用者处理
     }
 }
 
@@ -1223,13 +1463,53 @@ async function downloadSelected() {
     const originalText = downloadSelectedBtn.textContent;
     downloadSelectedBtn.textContent = '下载中...';
 
-    let count = 0;
+    // 收集要下载的图片，使用URL+tabId去重，避免重复下载
+    const downloadSet = new Set();
+    const imagesToDownload = [];
+
     for (const index of selectedImages) {
+        // 检查索引是否有效
+        if (index < 0 || index >= filteredImages.length) {
+            console.warn(`无效的索引: ${index}, 跳过`);
+            continue;
+        }
+
         const img = filteredImages[index];
-        await downloadImage(img, index);
+        if (!img) {
+            console.warn(`索引 ${index} 对应的图片不存在, 跳过`);
+            continue;
+        }
+
+        // 使用URL+tabId作为唯一标识，避免重复下载
+        const key = getDedupKeyFromUrl(img.url, img.tabId);
+        if (!downloadSet.has(key)) {
+            downloadSet.add(key);
+            imagesToDownload.push({ img, index });
+        } else {
+            console.log(`跳过重复图片: ${img.url.substring(0, 100)}...`);
+        }
+    }
+
+    console.log(`准备下载 ${imagesToDownload.length} 张图片（已去重，原始选择 ${selectedImages.size} 张）`);
+
+    let count = 0;
+    let successCount = 0;
+    let failCount = 0;
+    const baseTime = Date.now(); // 使用基础时间戳，避免文件名冲突
+
+    for (let i = 0; i < imagesToDownload.length; i++) {
+        const { img, index } = imagesToDownload[i];
+        try {
+            // 使用索引和序号确保文件名唯一
+            await downloadImage(img, index, baseTime + i);
+            successCount++;
+        } catch (error) {
+            console.error(`下载失败 [${i}]:`, img.url, error);
+            failCount++;
+        }
         count++;
 
-        downloadSelectedBtn.textContent = `下载中... (${count}/${selectedImages.size})`;
+        downloadSelectedBtn.textContent = `下载中... (${count}/${imagesToDownload.length})`;
 
         // 添加延迟避免下载过快
         await new Promise(resolve => setTimeout(resolve, 200));
@@ -1238,7 +1518,11 @@ async function downloadSelected() {
     downloadSelectedBtn.textContent = originalText;
     downloadSelectedBtn.disabled = false;
 
-    showNotification(`成功下载 ${count} 张图片！`, 'success');
+    if (failCount > 0) {
+        showNotification(`下载完成：成功 ${successCount} 张，失败 ${failCount} 张`, failCount === imagesToDownload.length ? 'error' : 'info');
+    } else {
+        showNotification(`成功下载 ${successCount} 张图片！`, 'success');
+    }
 }
 
 // 全选
@@ -1425,10 +1709,12 @@ function setupTabUpdateWatcher() {
             if (tabUpdateTimer) clearTimeout(tabUpdateTimer);
             tabUpdateTimer = setTimeout(async () => {
                 console.log('检测到当前标签页刷新/跳转，重新提取并启动监听');
+                // 在重新提取前，先进行一次全局去重，确保没有残留的重复图片
+                removeDuplicateImages();
                 await extractImagesFromCurrentTab();
                 await startNetworkMonitoring();
                 enableAutoExtract();
-            }, 500);
+            }, 1000); // 增加延迟，减少频繁刷新导致的抖动
         }
     });
 }
@@ -1497,20 +1783,53 @@ async function handleNewInterceptedImage(url, tabId) {
         await loadImageDimensions([img]);
         console.log('图片尺寸加载完成:', img.width, 'x', img.height);
 
+        // 加载尺寸后再次检查是否已存在（防止在加载期间被其他途径添加）
+        const existingKeysAfterLoad = new Set(allImages.map(img => getDedupKeyFromUrl(img.url, img.tabId)));
+        if (existingKeysAfterLoad.has(dedupKey)) {
+            console.log('图片在加载尺寸期间已被添加，跳过:', url);
+            return;
+        }
+
         console.log('添加新图片到列表');
 
-        // 保存当前选中的图片URL（基于URL而不是索引）
-        const selectedUrls = new Set();
+        // 保存当前选中的图片标识（基于URL+tabId，更可靠）
+        const selectedKeys = new Set();
         selectedImages.forEach(index => {
             if (filteredImages[index]) {
-                selectedUrls.add(filteredImages[index].url);
+                const img = filteredImages[index];
+                const key = getDedupKeyFromUrl(img.url, img.tabId);
+                selectedKeys.add(key);
             }
         });
 
         allImages.push(img);
 
-        // 静默更新，不显示通知，避免频繁刷新
-        applyFiltersAndSort();
+        // 立即进行去重检查（防止并发添加导致的重复）
+        removeDuplicateImages();
+
+        // 静默更新，使用防抖避免频繁刷新
+        if (applyFiltersAndSortTimer) clearTimeout(applyFiltersAndSortTimer);
+        applyFiltersAndSortTimer = setTimeout(() => {
+            applyFiltersAndSort();
+        }, 200);
+
+        // 恢复之前选中的图片（使用URL+tabId匹配，更准确）
+        selectedImages.clear();
+        filteredImages.forEach((img, index) => {
+            const key = getDedupKeyFromUrl(img.url, img.tabId);
+            if (selectedKeys.has(key)) {
+                selectedImages.add(index);
+            }
+        });
+
+        // 更新UI显示选中状态
+        document.querySelectorAll('.image-item').forEach((item, index) => {
+            if (selectedImages.has(index)) {
+                item.classList.add('selected');
+            } else {
+                item.classList.remove('selected');
+            }
+        });
 
         // 只在第一次添加时显示通知
         if (targetTabId === currentTabId && allImages.filter(img => img.tabId === currentTabId).length <= 1) {
