@@ -32,7 +32,7 @@ chrome.action.onClicked.addListener(async (tab) => {
 
         appTabId = newTab.id;
     } catch (error) {
-        console.error('打开应用页面失败:', error);
+        console.error('[ImageCapture] 打开应用页面失败:', error);
     }
 });
 
@@ -50,10 +50,11 @@ chrome.runtime.onInstalled.addListener((details) => {
         chrome.tabs.create({
             url: chrome.runtime.getURL('app.html')
         });
-    } else if (details.reason === 'update') {
-        console.log('扩展已更新');
     }
 });
+
+// 网络请求拦截器监听函数
+let networkRequestListener = null;
 
 // 网络请求拦截器
 function startNetworkInterceptor() {
@@ -61,33 +62,34 @@ function startNetworkInterceptor() {
 
     networkInterceptorActive = true;
 
+    // 创建监听函数
+    networkRequestListener = (details) => {
+        // 检查是否是图片请求
+        if (isImageRequest(details.url)) {
+            // 存储图片信息
+            interceptedImages.set(details.url, {
+                url: details.url,
+                timestamp: Date.now(),
+                tabId: details.tabId,
+                type: 'network_request'
+            });
+
+            // 通知应用页面有新的图片
+            notifyAppPage('newImage', {
+                url: details.url,
+                tabId: details.tabId
+            });
+        }
+    };
+
     // 监听所有网络请求
     chrome.webRequest.onBeforeRequest.addListener(
-        (details) => {
-            // 检查是否是图片请求
-            if (isImageRequest(details.url)) {
-                console.log('拦截到图片请求:', details.url);
-
-                // 存储图片信息
-                interceptedImages.set(details.url, {
-                    url: details.url,
-                    timestamp: Date.now(),
-                    tabId: details.tabId,
-                    type: 'network_request'
-                });
-
-                // 通知应用页面有新的图片
-                notifyAppPage('newImage', {
-                    url: details.url,
-                    tabId: details.tabId
-                });
-            }
-        },
+        networkRequestListener,
         { urls: ["<all_urls>"] },
         ["requestBody"]
     );
 
-    console.log('网络请求拦截器已启动');
+    console.log('[ImageCapture] Background 网络请求拦截器已启动');
 }
 
 // 停止网络请求拦截器
@@ -95,9 +97,13 @@ function stopNetworkInterceptor() {
     if (!networkInterceptorActive) return;
 
     networkInterceptorActive = false;
-    chrome.webRequest.onBeforeRequest.removeListener(startNetworkInterceptor);
 
-    console.log('网络请求拦截器已停止');
+    if (networkRequestListener) {
+        chrome.webRequest.onBeforeRequest.removeListener(networkRequestListener);
+        networkRequestListener = null;
+    }
+
+    console.log('[ImageCapture] Background 网络请求拦截器已停止');
 }
 
 // 判断是否是图片请求
@@ -120,7 +126,7 @@ function notifyAppPage(action, data) {
             action: action,
             data: data
         }).catch(error => {
-            console.log('无法发送消息到应用页面:', error);
+            // 静默失败，应用页面可能未打开
         });
     }
 }
@@ -140,7 +146,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         case 'imageDetected':
             // 处理从content script检测到的图片
-            console.log('Background收到图片检测:', request.data);
             interceptedImages.set(request.data.url, {
                 url: request.data.url,
                 timestamp: Date.now(),

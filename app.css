@@ -150,6 +150,13 @@ body {
     white-space: nowrap;
 }
 
+.mode-description {
+    font-size: 13px;
+    color: #6c757d;
+    font-style: italic;
+    line-height: 1.5;
+}
+
 .tab-selector {
     min-width: 300px;
     max-width: 400px;

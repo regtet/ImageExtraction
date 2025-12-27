@@ -29,6 +29,14 @@
                     <button id="refreshTabsBtn" class="btn-icon" title="刷新页面列表">🔄</button>
                 </div>
                 <div class="control-group">
+                    <label>⚙️ 捕获模式：</label>
+                    <select id="captureModeSelect" title="选择图片捕获方式">
+                        <option value="performance">模式1: Performance API</option>
+                        <option value="webrequest">模式2: WebRequest</option>
+                        <option value="dom">模式3: DOM提取</option>
+                    </select>
+                </div>
+                <div class="control-group">
                     <label>📊 排序方式：</label>
                     <select id="sortSelect">
                         <option value="default">默认顺序</option>
@@ -38,14 +46,10 @@
                         <option value="height-desc">高度（从大到小）</option>
                     </select>
                 </div>
-                <div class="control-group">
-                    <label>🔍 筛选类型：</label>
-                    <select id="filterSelect">
-                        <option value="all">全部图片</option>
-                        <option value="img">IMG标签</option>
-                        <option value="background">背景图片</option>
-                        <option value="base64">Base64图片</option>
-                    </select>
+            </div>
+            <div class="control-row">
+                <div class="control-group" style="flex: 1;">
+                    <span id="captureModeDescription" class="mode-description"></span>
                 </div>
             </div>
             <div class="control-row">

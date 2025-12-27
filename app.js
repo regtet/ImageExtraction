@@ -3,7 +3,6 @@ let filteredImages = [];
 let selectedImages = new Set();
 let currentTabId = null;
 let autoExtractEnabled = false;
-let autoExtractInterval = null;
 // let lastImageCount = 0; // 未使用的变量，已移除
 let lastClickedIndex = -1; // 用于Shift范围选择
 let activeSizeFilters = new Set(); // 当前激活的尺寸筛选（支持多选）
@@ -22,12 +21,14 @@ let blacklistKeywords = new Set(); // 存储黑名单关键字
 // 白名单相关
 let whitelistKeywords = new Set(); // 存储白名单关键字
 let filterMode = 'blacklist'; // 过滤模式：'blacklist' 或 'whitelist'
+let captureMode = 'dom'; // 捕获模式：'performance', 'webrequest', 'dom'
 
 // DOM元素
 const tabSelect = document.getElementById('tabSelect');
 const refreshTabsBtn = document.getElementById('refreshTabsBtn');
+const captureModeSelect = document.getElementById('captureModeSelect');
+const captureModeDescription = document.getElementById('captureModeDescription');
 const sortSelect = document.getElementById('sortSelect');
-const filterSelect = document.getElementById('filterSelect');
 const selectAllBtn = document.getElementById('selectAllBtn');
 const deselectAllBtn = document.getElementById('deselectAllBtn');
 const invertSelectionBtn = document.getElementById('invertSelectionBtn');
@@ -59,35 +60,25 @@ const blacklistRow = document.querySelector('.blacklist-row');
 // 初始化
 async function init() {
     loadSizeFilterState(); // 加载保存的尺寸筛选状态
-    // 过滤模式与黑名单已移除
+    loadCaptureModeState(); // 加载保存的捕获模式
 
     setupEventListeners();
     setupTabUpdateWatcher(); // 监听标签页导航完成后自动重新提取
-    setupNetworkMonitoring(); // 设置网络请求监听
 
-    // 默认开启自动持续提取和网络请求监听
+    // 默认开启HTTP请求监听（当有新HTTP请求时提取图片）
     autoExtractEnabled = true;
-    networkMonitoringEnabled = true;
 
-    // 先加载标签页，再启动网络监听
+    // 加载标签页
     await loadAvailableTabs();
-
-    // 启动网络监听
-    await startNetworkMonitoring();
 }
 
 // 设置事件监听
 function setupEventListeners() {
     tabSelect.addEventListener('change', handleTabChange);
     refreshTabsBtn.addEventListener('click', loadAvailableTabs);
+    captureModeSelect.addEventListener('change', handleCaptureModeChange);
     // 使用防抖处理排序和筛选，避免频繁刷新导致UI抖动
     sortSelect.addEventListener('change', () => {
-        if (applyFiltersAndSortTimer) clearTimeout(applyFiltersAndSortTimer);
-        applyFiltersAndSortTimer = setTimeout(() => {
-            applyFiltersAndSort();
-        }, 100);
-    });
-    filterSelect.addEventListener('change', () => {
         if (applyFiltersAndSortTimer) clearTimeout(applyFiltersAndSortTimer);
         applyFiltersAndSortTimer = setTimeout(() => {
             applyFiltersAndSort();
@@ -105,97 +96,77 @@ function setupEventListeners() {
 
 }
 
-// 自动提取功能（默认开启）
+// 启用HTTP请求监听（替代定时器自动提取）
 function enableAutoExtract() {
     const selectedTabId = parseInt(tabSelect.value);
     if (!selectedTabId) {
-        console.log('没有选中标签页，无法启动自动提取');
         return;
     }
 
     // 先提取一次
     extractImagesFromCurrentTab();
 
-    // 启动自动提取
-    startAutoExtract();
-    console.log('自动持续提取已启动');
-}
-
-// 启动自动提取
-function startAutoExtract() {
-    if (autoExtractInterval) {
-        clearInterval(autoExtractInterval);
+    // 根据捕获模式决定是否启动HTTP请求监听
+    // Performance和WebRequest模式需要启动background拦截，DOM模式使用HTTP触发
+    if (captureMode === 'dom') {
+        // DOM模式：使用HTTP请求触发
+        startHttpRequestMonitoring(selectedTabId);
+    } else if (captureMode === 'performance' || captureMode === 'webrequest') {
+        // Performance和WebRequest模式：启动background拦截
+        chrome.runtime.sendMessage({ action: 'startNetworkInterceptor' }).catch(() => { });
+        // Performance模式也需要启动content script的Performance Observer
+        if (captureMode === 'performance') {
+            chrome.tabs.sendMessage(selectedTabId, { action: 'startNetworkMonitoring' }).catch(() => { });
+        }
     }
-
-    autoExtractInterval = setInterval(async () => {
-        if (!autoExtractEnabled) {
-            stopAutoExtract();
-            return;
-        }
-
-        const selectedTabId = parseInt(tabSelect.value);
-        if (!selectedTabId) {
-            return;
-        }
-
-        try {
-            // 静默提取（不显示加载动画）
-            const results = await chrome.scripting.executeScript({
-                target: { tabId: selectedTabId },
-                function: extractImagesFromPage
-            });
-
-            const newImages = (results[0].result || []).map(img => ({
-                ...img,
-                tabId: selectedTabId
-            }));
-            await loadImageDimensions(newImages);
-
-            // 检查是否有新图片（使用URL+tabId作为唯一标识）
-            const existingKeys = new Set(allImages.map(img => getDedupKeyFromUrl(img.url, img.tabId)));
-            let newCount = 0;
-
-            newImages.forEach(img => {
-                const key = getDedupKeyFromUrl(img.url, img.tabId);
-                if (!existingKeys.has(key)) {
-                    allImages.push(img);
-                    existingKeys.add(key);
-                    newCount++;
-                }
-            });
-
-            // 如果添加了新图片，立即进行去重检查（防止并发添加导致的重复）
-            if (newCount > 0) {
-                removeDuplicateImages();
-                // 使用防抖，避免频繁刷新导致UI抖动
-                if (applyFiltersAndSortTimer) clearTimeout(applyFiltersAndSortTimer);
-                applyFiltersAndSortTimer = setTimeout(() => {
-                    applyFiltersAndSort();
-                    showNotification(`发现 ${newCount} 张新图片！总共 ${allImages.length} 张`, 'success');
-                }, 200);
-            }
-        } catch (error) {
-            console.error('自动提取失败:', error);
-        }
-    }, 5000); // 每5秒检测一次
 }
 
-// 停止自动提取
-function stopAutoExtract() {
-    if (autoExtractInterval) {
-        clearInterval(autoExtractInterval);
-        autoExtractInterval = null;
+// 启动HTTP请求监听
+async function startHttpRequestMonitoring(tabId) {
+    try {
+        await chrome.tabs.sendMessage(tabId, { action: 'startHttpRequestMonitoring' });
+    } catch (error) {
+        // 如果content script还未加载，尝试注入
+        try {
+            await chrome.scripting.executeScript({
+                target: { tabId: tabId },
+                files: ['content.js']
+            });
+            await new Promise(resolve => setTimeout(resolve, 100));
+            await chrome.tabs.sendMessage(tabId, { action: 'startHttpRequestMonitoring' });
+        } catch (err) {
+            console.error(`[ImageCapture] 启动HTTP请求监听失败 (tabId: ${tabId}):`, err.message);
+        }
+    }
+}
+
+// 停止HTTP请求监听
+async function stopHttpRequestMonitoring(tabId) {
+    try {
+        await chrome.tabs.sendMessage(tabId, { action: 'stopHttpRequestMonitoring' });
+    } catch (error) {
+        // 忽略错误
+    }
+}
+
+// 处理HTTP请求检测，触发图片提取（带防抖）
+let extractDebounceTimer = null;
+async function handleHttpRequestDetected(tabId) {
+    // 防抖：如果当前标签页匹配，延迟500ms后提取（避免频繁提取）
+    if (parseInt(tabSelect.value) === tabId) {
+        if (extractDebounceTimer) {
+            clearTimeout(extractDebounceTimer);
+        }
+        extractDebounceTimer = setTimeout(async () => {
+            await extractImagesFromCurrentTab();
+        }, 500);
     }
 }
 
 // 加载可用标签页
 async function loadAvailableTabs() {
     try {
-        console.log('开始加载可用标签页...');
-
         const tabs = await chrome.tabs.query({});
-        console.log('所有标签页数量:', tabs.length);
-
         tabSelect.innerHTML = '';
 
         // 过滤掉chrome://等特殊页面，包括扩展页面
@@ -206,8 +177,6 @@ async function loadAvailableTabs() {
             !tab.url.startsWith('about:') &&
             !tab.url.includes('extension') // 排除扩展页面
         );
-
-        console.log('有效标签页数量:', validTabs.length);
 
         if (validTabs.length === 0) {
             tabSelect.innerHTML = '<option value="">没有可提取的页面</option>';
@@ -221,21 +190,17 @@ async function loadAvailableTabs() {
         let selectedTab = null;
         try {
             const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-            console.log('当前活跃标签页:', activeTab);
-
             // 检查活跃标签页是否在有效标签页列表中
             if (activeTab && validTabs.some(tab => tab.id === activeTab.id)) {
                 selectedTab = activeTab;
-                console.log('找到活跃标签页:', activeTab.title);
             }
         } catch (error) {
-            console.log('无法获取活跃标签页:', error);
+            // 忽略错误
         }
 
         // 如果没有找到活跃标签页，选择最新的标签页
         if (!selectedTab && validTabs.length > 0) {
             selectedTab = validTabs[0];
-            console.log('选择最新标签页:', selectedTab.title);
         }
 
         // 创建选项
@@ -248,26 +213,112 @@ async function loadAvailableTabs() {
             if (selectedTab && tab.id === selectedTab.id) {
                 option.selected = true;
                 currentTabId = tab.id;
-                console.log('已选择标签页:', tab.title);
             }
             tabSelect.appendChild(option);
         });
 
         // 如果找到了合适的标签页，自动提取该页面的图片
         if (selectedTab) {
-            console.log('自动选择页面:', selectedTab.title);
             // 延迟一点时间确保UI完全加载
             setTimeout(async () => {
                 await extractImagesFromCurrentTab();
                 // 启动自动持续提取
                 enableAutoExtract();
-                console.log('插件已自动开始获取图片');
             }, 1000);
-        } else {
-            console.log('未找到合适的标签页，请手动选择');
         }
     } catch (error) {
-        console.error('加载标签页失败:', error);
+        console.error(`[ImageCapture] 加载标签页失败:`, error);
+    }
+}
+
+// 处理捕获模式切换
+async function handleCaptureModeChange() {
+    const newMode = captureModeSelect.value;
+    const oldMode = captureMode;
+    captureMode = newMode;
+    saveCaptureModeState();
+    updateCaptureModeDescription(); // 更新模式描述
+
+    console.log(`[ImageCapture] 捕获模式已从 ${oldMode} 切换到: ${newMode}`);
+    showNotification(`已切换到${getCaptureModeName(newMode)}模式`, 'info');
+
+    // 切换模式时，清空共享的存储，确保模式之间相互隔离
+    // 1. 清空background script中的拦截图片
+    try {
+        await chrome.runtime.sendMessage({ action: 'clearInterceptedImages' });
+    } catch (error) {
+        console.warn('[ImageCapture] 清空拦截图片失败:', error);
+    }
+
+    // 2. 清空当前图片列表，避免显示其他模式的数据
+    allImages = [];
+    filteredImages = [];
+    selectedImages.clear();
+    renderImages(0);
+    updateStats();
+
+    // 3. 停止旧的监听器
+    const selectedTabId = parseInt(tabSelect.value);
+    if (selectedTabId) {
+        // 停止旧的HTTP请求监听（DOM模式使用）
+        await stopHttpRequestMonitoring(selectedTabId);
+        // 停止旧的网络拦截器（Performance和WebRequest模式使用）
+        await chrome.runtime.sendMessage({ action: 'stopNetworkInterceptor' }).catch(() => { });
+    }
+
+    // 4. 如果当前有选中的标签页，使用新模式重新提取
+    if (selectedTabId) {
+        await extractImagesFromCurrentTab();
+    }
+}
+
+// 获取捕获模式名称
+function getCaptureModeName(mode) {
+    const names = {
+        'performance': 'Performance API',
+        'webrequest': 'WebRequest',
+        'dom': 'DOM提取'
+    };
+    return names[mode] || mode;
+}
+
+// 获取捕获模式描述
+function getCaptureModeDescription(mode) {
+    const descriptions = {
+        'performance': '从 Performance API 获取所有已成功加载的图片资源（快速，包含历史图片）',
+        'webrequest': '使用 WebRequest API 拦截所有图片网络请求（实时拦截，仅捕获HTTP请求的图片）',
+        'dom': '从页面 DOM 中提取图片（包括 img 标签、背景图片、SVG 和 Base64，最准确）'
+    };
+    return descriptions[mode] || '';
+}
+
+// 更新模式描述显示
+function updateCaptureModeDescription() {
+    if (captureModeDescription) {
+        const description = getCaptureModeDescription(captureMode);
+        captureModeDescription.textContent = description || '';
+    }
+}
+
+// 保存捕获模式状态
+function saveCaptureModeState() {
+    localStorage.setItem('imageExtractor_captureMode', captureMode);
+}
+
+// 加载捕获模式状态
+function loadCaptureModeState() {
+    try {
+        const saved = localStorage.getItem('imageExtractor_captureMode');
+        if (saved && ['performance', 'webrequest', 'dom'].includes(saved)) {
+            captureMode = saved;
+            captureModeSelect.value = saved;
+            console.log(`[ImageCapture] 加载保存的捕获模式: ${captureMode}`);
+        }
+        // 无论是否有保存的状态，都更新模式描述
+        updateCaptureModeDescription();
+    } catch (error) {
+        console.error('[ImageCapture] 加载捕获模式状态失败:', error);
+        updateCaptureModeDescription();
     }
 }
 
@@ -275,8 +326,11 @@ async function loadAvailableTabs() {
 async function handleTabChange() {
     const newTabId = parseInt(tabSelect.value) || null;
 
-    // 停止现有自动提取
-    stopAutoExtract();
+    // 停止现有监听
+    const oldTabId = currentTabId;
+    if (oldTabId) {
+        await stopHttpRequestMonitoring(oldTabId);
+    }
 
     // 清空旧数据，防止跨标签残留
     allImages = [];
@@ -301,18 +355,81 @@ async function handleTabChange() {
         return;
     }
 
-    // 重新提取并开启自动提取
+    // 重新提取并启动监听
     await extractImagesFromCurrentTab();
+
+    // 启动新标签页的监听
     enableAutoExtract();
 }
 
-// 从当前选中的标签页提取图片
+// 模式1: 使用Performance API提取图片
+async function extractImagesUsingPerformanceAPI(tabId) {
+    try {
+        // 从content script获取Performance API中的图片资源
+        const response = await chrome.tabs.sendMessage(tabId, { action: 'getAllLoadedImages' });
+        if (response && response.success && response.images) {
+            return response.images.map(img => ({
+                ...img,
+                tabId: tabId,
+                type: img.type || 'network_request'
+            }));
+        }
+    } catch (error) {
+        console.error(`[ImageCapture] Performance API提取失败 (tabId: ${tabId}):`, error);
+        // 如果content script未加载，尝试注入
+        try {
+            await chrome.scripting.executeScript({
+                target: { tabId: tabId },
+                files: ['content.js']
+            });
+            await new Promise(resolve => setTimeout(resolve, 100));
+            const response = await chrome.tabs.sendMessage(tabId, { action: 'getAllLoadedImages' });
+            if (response && response.success && response.images) {
+                return response.images.map(img => ({
+                    ...img,
+                    tabId: tabId,
+                    type: img.type || 'network_request'
+                }));
+            }
+        } catch (err) {
+            console.error(`[ImageCapture] 注入脚本后Performance API提取仍失败:`, err);
+        }
+    }
+    return [];
+}
+
+// 模式2: 使用WebRequest提取图片
+async function extractImagesUsingWebRequest(tabId) {
+    try {
+        // 从background script获取拦截到的图片
+        const response = await chrome.runtime.sendMessage({ action: 'getInterceptedImages' });
+        if (response && response.success && response.images) {
+            // 只返回当前标签页的图片，并过滤掉base64图片（webRequest不应该拦截base64）
+            const tabImages = response.images.filter(img =>
+                img.tabId === tabId &&
+                !img.url.startsWith('data:') &&  // 过滤base64图片
+                !img.url.startsWith('blob:')     // 过滤blob URL
+            );
+            return tabImages.map(img => ({
+                url: img.url,
+                type: img.type || 'network_request',
+                tabId: tabId,
+                width: 0,
+                height: 0,
+                alt: ''
+            }));
+        }
+    } catch (error) {
+        console.error(`[ImageCapture] WebRequest提取失败 (tabId: ${tabId}):`, error);
+    }
+    return [];
+}
+
+// 从当前选中的标签页提取图片（根据选择的模式）
 async function extractImagesFromCurrentTab() {
     const selectedTabId = parseInt(tabSelect.value);
-    console.log('准备提取图片，选中的标签页ID:', selectedTabId);
 
     if (!selectedTabId) {
-        console.log('没有选中标签页，请手动选择');
         alert('请选择要提取图片的页面');
         return;
     }
@@ -334,16 +451,26 @@ async function extractImagesFromCurrentTab() {
             }
         });
 
-        // 注入并执行内容脚本
-        const results = await chrome.scripting.executeScript({
-            target: { tabId: selectedTabId },
-            function: extractImagesFromPage
-        });
+        // 根据选择的捕获模式提取图片
+        let newImages = [];
 
-        const newImages = (results[0].result || []).map(img => ({
-            ...img,
-            tabId: selectedTabId
-        }));
+        if (captureMode === 'performance') {
+            // 模式1: Performance API
+            newImages = await extractImagesUsingPerformanceAPI(selectedTabId);
+        } else if (captureMode === 'webrequest') {
+            // 模式2: WebRequest
+            newImages = await extractImagesUsingWebRequest(selectedTabId);
+        } else {
+            // 模式3: DOM提取（默认）
+            const results = await chrome.scripting.executeScript({
+                target: { tabId: selectedTabId },
+                function: extractImagesFromPage
+            });
+            newImages = (results[0].result || []).map(img => ({
+                ...img,
+                tabId: selectedTabId
+            }));
+        }
 
         // 等待图片加载完成后获取尺寸信息
         await loadImageDimensions(newImages);
@@ -359,6 +486,13 @@ async function extractImagesFromCurrentTab() {
                 addedCount++;
             }
         });
+
+        // 只在有新增时才打印日志
+        if (addedCount > 0) {
+            console.log(`[ImageCapture] 提取完成: 新增 ${addedCount} 张，总共 ${allImages.length} 张 (tabId: ${selectedTabId})`);
+        } else if (newImages.length > 0) {
+            console.log(`[ImageCapture] 提取完成: 所有图片已存在，当前总共 ${allImages.length} 张 (tabId: ${selectedTabId})`);
+        }
 
         // 如果添加了新图片，立即进行去重检查（防止并发添加导致的重复）
         if (addedCount > 0) {
@@ -400,13 +534,14 @@ async function extractImagesFromCurrentTab() {
             showNotification(`成功提取 ${newImages.length} 张图片！总共 ${allImages.length} 张`, 'success');
         }
     } catch (error) {
-        console.error('提取图片失败:', error);
+        console.error(`[ImageCapture] 提取图片失败 (tabId: ${selectedTabId}):`, error);
         loadingIndicator.style.display = 'none';
         showNotification('提取失败，请确保页面已完全加载', 'error');
     }
 }
 
-// 在页面中执行的函数（提取图片）
+// 在页面中执行的函数（提取图片）- 已废弃，改为使用网络请求捕获
+// 在页面中执行的函数（从DOM提取图片）
 function extractImagesFromPage() {
     const images = [];
     const seenUrls = new Set();
@@ -584,7 +719,6 @@ function applyFiltersAndSort() {
         console.log('检测到重复图片，已自动去重');
     }
 
-    const filterType = filterSelect.value;
     const sortType = sortSelect.value;
 
     // 仅处理当前标签页的图片
@@ -651,10 +785,6 @@ function applyFiltersAndSort() {
 
     // 筛选
     filteredImages = currentTabImages.filter(img => {
-        if (filterType !== 'all' && img.type !== filterType) {
-            return false;
-        }
-
         // 尺寸筛选
         // 如果用户主动清空且无选中尺寸，则不显示任何图片
         if (sizeFilterUserCleared && activeSizeFilters.size === 0) return false;
@@ -1574,15 +1704,15 @@ function invertSelection() {
 }
 
 // 清空所有图片
-function clearAll() {
+async function clearAll() {
     if (allImages.length === 0) return;
 
     if (confirm(`确定要清空所有 ${allImages.length} 张图片吗？`)) {
-        // 停止自动提取
-        if (autoExtractEnabled) {
-            autoExtractToggle.checked = false;
-            autoExtractEnabled = false;
-            stopAutoExtract();
+        // 停止监听
+        const selectedTabId = parseInt(tabSelect.value);
+        if (selectedTabId) {
+            await stopHttpRequestMonitoring(selectedTabId);
+            chrome.runtime.sendMessage({ action: 'stopNetworkInterceptor' }).catch(() => { });
         }
 
         // 清除尺寸筛选
@@ -1683,20 +1813,16 @@ window.addEventListener('DOMContentLoaded', init);
 
 // 网络请求监听相关函数
 function setupNetworkMonitoring() {
-    console.log('设置网络监听...');
-    // 监听来自background script的消息
+    // 监听来自content script的HTTP请求检测消息
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-        console.log('收到消息:', request);
-        if (request.action === 'newImage') {
-            console.log('收到新图片通知:', request.data);
-            interceptedImages.add(request.data.url);
-
-            // 处理所有拦截到的图片，不限制标签页
-            console.log('处理拦截到的图片:', request.data.url);
-            handleNewInterceptedImage(request.data.url, request.data.tabId || sender.tab?.id || currentTabId);
+        if (request.action === 'httpRequestDetected') {
+            const tabId = sender.tab?.id;
+            if (tabId) {
+                handleHttpRequestDetected(tabId);
+            }
         }
+        return true; // 保持消息通道开放
     });
-    console.log('网络监听设置完成');
 }
 
 // 监听标签页导航完成，自动重新提取并重启监听
@@ -1704,16 +1830,40 @@ function setupTabUpdateWatcher() {
     let tabUpdateTimer = null;
     chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
         if (tabId !== currentTabId) return;
+
+        // 对于WebRequest模式，需要在页面开始加载时（status === 'loading'）就启动拦截器
+        // 否则会错过初始的图片请求
+        if (changeInfo.status === 'loading' && captureMode === 'webrequest') {
+            // 清空之前的拦截图片，准备接收新的请求
+            chrome.runtime.sendMessage({ action: 'clearInterceptedImages' }).catch(() => { });
+            // 确保拦截器已启动（如果还没启动）
+            chrome.runtime.sendMessage({ action: 'startNetworkInterceptor' }).catch(() => { });
+        }
+
         if (changeInfo.status === 'complete') {
             // 防抖，避免同一加载过程多次触发
             if (tabUpdateTimer) clearTimeout(tabUpdateTimer);
             tabUpdateTimer = setTimeout(async () => {
-                console.log('检测到当前标签页刷新/跳转，重新提取并启动监听');
                 // 在重新提取前，先进行一次全局去重，确保没有残留的重复图片
                 removeDuplicateImages();
+
                 await extractImagesFromCurrentTab();
-                await startNetworkMonitoring();
-                enableAutoExtract();
+
+                // 页面刷新后重新启动相应的监听器
+                const selectedTabId = parseInt(tabSelect.value);
+                if (selectedTabId) {
+                    if (captureMode === 'dom') {
+                        // DOM模式：使用HTTP请求触发
+                        startHttpRequestMonitoring(selectedTabId);
+                    } else if (captureMode === 'performance') {
+                        // Performance模式：启动background拦截和Performance Observer
+                        chrome.runtime.sendMessage({ action: 'startNetworkInterceptor' }).catch(() => { });
+                        chrome.tabs.sendMessage(selectedTabId, { action: 'startNetworkMonitoring' }).catch(() => { });
+                    } else if (captureMode === 'webrequest') {
+                        // WebRequest模式：拦截器应该在loading阶段已启动，这里只需要确保它运行
+                        chrome.runtime.sendMessage({ action: 'startNetworkInterceptor' }).catch(() => { });
+                    }
+                }
             }, 1000); // 增加延迟，减少频繁刷新导致的抖动
         }
     });
@@ -1727,45 +1877,34 @@ async function handleNewInterceptedImage(url, tabId) {
 
         // 没有标签页时不处理，防止 undefined 报错
         if (!targetTabId) {
-            console.log('未指定标签页，忽略拦截图片:', url);
             return;
         }
 
         // 防止重复处理
         dedupKey = getDedupKeyFromUrl(url, targetTabId);
         if (processingImages.has(dedupKey)) {
-            console.log('图片正在处理中，跳过:', url);
             return;
         }
 
         // 检查是否已存在
         const existingKeys = new Set(allImages.map(img => getDedupKeyFromUrl(img.url, img.tabId)));
         if (existingKeys.has(dedupKey)) {
-            console.log('图片已存在，跳过:', url);
             return;
         }
 
         processingImages.add(dedupKey);
-        console.log('开始处理拦截图片:', url);
-        console.log('当前过滤模式:', filterMode);
-        console.log('黑名单关键字:', Array.from(blacklistKeywords));
-        console.log('白名单关键字:', Array.from(whitelistKeywords));
 
         // 根据过滤模式检查图片
         if (filterMode === 'blacklist') {
             // 黑名单模式：检查是否在黑名单中
             if (isBlacklisted(url)) {
-                console.log('图片被黑名单拦截:', url);
                 return;
             }
-            console.log('黑名单模式：图片通过检查');
         } else if (filterMode === 'whitelist') {
             // 白名单模式：检查是否在白名单中
             if (!isWhitelisted(url)) {
-                console.log('图片不在白名单中:', url);
                 return;
             }
-            console.log('白名单模式：图片通过检查');
         }
 
         // 创建图片对象
@@ -1778,19 +1917,14 @@ async function handleNewInterceptedImage(url, tabId) {
             alt: ''
         };
 
-        console.log('开始加载图片尺寸...');
         // 加载图片尺寸
         await loadImageDimensions([img]);
-        console.log('图片尺寸加载完成:', img.width, 'x', img.height);
 
         // 加载尺寸后再次检查是否已存在（防止在加载期间被其他途径添加）
         const existingKeysAfterLoad = new Set(allImages.map(img => getDedupKeyFromUrl(img.url, img.tabId)));
         if (existingKeysAfterLoad.has(dedupKey)) {
-            console.log('图片在加载尺寸期间已被添加，跳过:', url);
             return;
         }
-
-        console.log('添加新图片到列表');
 
         // 保存当前选中的图片标识（基于URL+tabId，更可靠）
         const selectedKeys = new Set();
@@ -1833,11 +1967,10 @@ async function handleNewInterceptedImage(url, tabId) {
 
         // 只在第一次添加时显示通知
         if (targetTabId === currentTabId && allImages.filter(img => img.tabId === currentTabId).length <= 1) {
-            showNotification(`网络监听发现新图片: ${url}`, 'success');
+            showNotification(`网络监听发现新图片: ${url.substring(0, 50)}...`, 'success');
         }
-        console.log('当前图片总数（全部标签）:', allImages.length);
     } catch (error) {
-        console.error('处理拦截图片失败:', error);
+        console.error(`[ImageCapture] 处理拦截图片失败 (tabId: ${tabId || currentTabId}):`, error);
     } finally {
         // 清理处理状态
         if (dedupKey) {
@@ -1849,32 +1982,28 @@ async function handleNewInterceptedImage(url, tabId) {
 // 启动网络请求监听
 async function startNetworkMonitoring() {
     try {
-        console.log('开始启动网络监听...');
+        console.log(`[ImageCapture] 启动网络请求监听`);
 
         // 启动background script的网络拦截
         await chrome.runtime.sendMessage({ action: 'startNetworkInterceptor' });
-        console.log('Background网络拦截已启动');
+        console.log(`[ImageCapture] Background 网络拦截已启动`);
 
         // 启动content script的网络监听
         const selectedTabId = parseInt(tabSelect.value);
-        console.log('选中的标签页ID:', selectedTabId);
 
         if (selectedTabId) {
             try {
                 await chrome.tabs.sendMessage(selectedTabId, { action: 'startNetworkMonitoring' });
-                console.log('Content script网络监听已启动');
+                console.log(`[ImageCapture] Content script 网络监听已启动 (tabId: ${selectedTabId})`);
             } catch (error) {
-                console.error('启动content script监听失败:', error);
+                console.error(`[ImageCapture] 启动 content script 监听失败 (tabId: ${selectedTabId}):`, error.message);
                 // 即使content script失败，background script仍然可以工作
             }
-        } else {
-            console.log('没有选中标签页，只启动background监听');
         }
 
         networkMonitoringEnabled = true;
-        console.log('网络请求监听已启动');
     } catch (error) {
-        console.error('启动网络监听失败:', error);
+        console.error(`[ImageCapture] 启动网络监听失败:`, error);
     }
 }
 
@@ -1891,9 +2020,9 @@ async function stopNetworkMonitoring() {
         }
 
         networkMonitoringEnabled = false;
-        showNotification('网络请求监听已停止', 'info');
+        console.log(`[ImageCapture] 网络请求监听已停止`);
     } catch (error) {
-        console.error('停止网络监听失败:', error);
+        console.error(`[ImageCapture] 停止网络监听失败:`, error);
     }
 }
 
@@ -2303,7 +2432,8 @@ window.removeDuplicates = function () {
 
 // 页面关闭前清理
 window.addEventListener('beforeunload', () => {
-    if (autoExtractInterval) {
-        clearInterval(autoExtractInterval);
+    // 清理防抖定时器
+    if (extractDebounceTimer) {
+        clearTimeout(extractDebounceTimer);
     }
 });
