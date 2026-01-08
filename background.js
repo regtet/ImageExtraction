@@ -7,6 +7,8 @@ let appTabId = null;
 // 存储网络请求拦截器状态
 let networkInterceptorActive = false;
 let interceptedImages = new Map(); // 存储拦截到的图片信息
+let targetTabId = null; // 当前目标标签页ID（只拦截这个标签页的图片）
+let targetTabUrl = null; // 当前目标标签页的URL（用于检测页面导航）
 
 // 监听扩展图标点击
 chrome.action.onClicked.addListener(async (tab) => {
@@ -57,29 +59,103 @@ chrome.runtime.onInstalled.addListener((details) => {
 let networkRequestListener = null;
 
 // 网络请求拦截器
-function startNetworkInterceptor() {
-    if (networkInterceptorActive) return;
+async function startNetworkInterceptor(tabId = null) {
+    // 获取目标标签页的URL
+    if (tabId) {
+        try {
+            const tab = await chrome.tabs.get(tabId);
+            const newUrl = tab.url;
+            // 如果URL变化了，清空拦截记录（页面导航了）
+            if (targetTabUrl && targetTabUrl !== newUrl) {
+                interceptedImages.clear();
+            }
+            targetTabUrl = newUrl;
+        } catch (e) {
+            // 忽略错误
+        }
+    }
+
+    // 如果已经启动，更新目标标签页ID和URL
+    if (networkInterceptorActive) {
+        targetTabId = tabId;
+        // 更新URL（如果提供了tabId）
+        if (tabId) {
+            try {
+                const tab = await chrome.tabs.get(tabId);
+                const newUrl = tab.url;
+                // 如果URL变化了，清空拦截记录（页面导航了）
+                if (targetTabUrl && targetTabUrl !== newUrl) {
+                    interceptedImages.clear();
+                }
+                targetTabUrl = newUrl;
+            } catch (e) {
+                // 忽略错误
+            }
+        } else {
+            targetTabUrl = null;
+        }
+        // 不打印更新日志，减少日志噪音
+        return;
+    }
 
     networkInterceptorActive = true;
+    targetTabId = tabId; // 设置目标标签页ID
 
     // 创建监听函数
-    networkRequestListener = (details) => {
-        // 检查是否是图片请求
-        if (isImageRequest(details.url)) {
-            // 存储图片信息
-            interceptedImages.set(details.url, {
-                url: details.url,
-                timestamp: Date.now(),
-                tabId: details.tabId,
-                type: 'network_request'
-            });
+    networkRequestListener = async (details) => {
+        const url = details.url;
+        const requestTabId = details.tabId;
 
-            // 通知应用页面有新的图片
-            notifyAppPage('newImage', {
-                url: details.url,
-                tabId: details.tabId
-            });
+        // 检查是否是图片请求
+        const isImage = isImageRequest(url);
+        if (!isImage) {
+            return; // 不是图片，直接返回
         }
+
+        let tabId = requestTabId;
+
+        // 移除tabId限制：拦截所有图片请求，由应用页面决定是否显示
+        // 如果tabId是-1，尝试通过URL找到对应的标签页
+        if (tabId === -1 && targetTabId !== null) {
+            try {
+                // 获取目标标签页信息
+                const targetTab = await chrome.tabs.get(targetTabId);
+                if (targetTab && targetTab.url) {
+                    try {
+                        const urlObj = new URL(details.url);
+                        const tabUrlObj = new URL(targetTab.url);
+                        // 如果域名匹配，认为是目标标签页的图片
+                        if (tabUrlObj.hostname === urlObj.hostname) {
+                            tabId = targetTabId;
+                        }
+                    } catch (e) {
+                        // URL解析失败，使用原始tabId
+                    }
+                }
+            } catch (e) {
+                // 获取标签页失败，使用原始tabId
+            }
+        }
+
+        // 检查是否已经拦截过这张图片（避免重复）
+        if (interceptedImages.has(url)) {
+            return; // 已经拦截过，不重复处理
+        }
+
+        // 存储图片信息
+        interceptedImages.set(url, {
+            url: url,
+            timestamp: Date.now(),
+            tabId: tabId,
+            type: 'network_request'
+        });
+
+        // 通知应用页面有新的图片（实时添加）
+        notifyAppPage('newImage', {
+            url: url,
+            tabId: tabId,
+            type: 'network_request'
+        });
     };
 
     // 监听所有网络请求
@@ -89,7 +165,6 @@ function startNetworkInterceptor() {
         ["requestBody"]
     );
 
-    console.log('[ImageCapture] Background 网络请求拦截器已启动');
 }
 
 // 停止网络请求拦截器
@@ -97,26 +172,92 @@ function stopNetworkInterceptor() {
     if (!networkInterceptorActive) return;
 
     networkInterceptorActive = false;
+    targetTabId = null; // 清除目标标签页ID
+    targetTabUrl = null; // 清除目标标签页URL
 
     if (networkRequestListener) {
         chrome.webRequest.onBeforeRequest.removeListener(networkRequestListener);
         networkRequestListener = null;
     }
 
-    console.log('[ImageCapture] Background 网络请求拦截器已停止');
 }
 
-// 判断是否是图片请求
+// 判断是否是图片请求（严格版）
 function isImageRequest(url) {
-    const imageExtensions = /\.(jpg|jpeg|png|gif|webp|avif|bmp|svg|ico|tiff?)$/i;
-    const imageMimeTypes = /\.(jpg|jpeg|png|gif|webp|avif|bmp|svg|ico|tiff?)(\?.*)?$/i;
+    if (!url || typeof url !== 'string') {
+        return false;
+    }
 
-    return imageExtensions.test(url) ||
-        imageMimeTypes.test(url) ||
-        url.includes('image/') ||
-        url.includes('img/') ||
-        url.includes('photo/') ||
-        url.includes('picture/');
+    const urlLower = url.toLowerCase();
+
+    // 首先排除明显不是图片的文件类型（必须在URL末尾或查询参数前）
+    const nonImageExtensions = /\.(css|js|html|htm|json|xml|txt|pdf|zip|rar|exe|dll|woff|woff2|ttf|eot|otf)(\?|#|$)/i;
+    if (nonImageExtensions.test(url)) {
+        return false;
+    }
+
+    // 排除包含这些关键词但不是图片的URL（更严格的检查）
+    if (urlLower.includes('.css') || urlLower.includes('.js') ||
+        urlLower.includes('/css/') || urlLower.includes('/js/') ||
+        urlLower.includes('stylesheet') || urlLower.includes('script') ||
+        urlLower.endsWith('.css') || urlLower.endsWith('.js')) {
+        return false;
+    }
+
+    // 检查是否是data URL图片
+    if (url.startsWith('data:image/')) {
+        return true;
+    }
+
+    // 检查文件扩展名（必须明确是图片格式）
+    const imageExtensions = /\.(jpg|jpeg|png|gif|webp|avif|bmp|svg|ico|tiff?)(\?.*)?$/i;
+    if (imageExtensions.test(url)) {
+        return true;
+    }
+
+    // 检查URL中是否包含图片相关的路径（更宽松的匹配）
+    // 但必须严格排除CSS/JS文件
+    if (urlLower.includes('/image') || urlLower.includes('/img') ||
+        urlLower.includes('/photo') || urlLower.includes('/pic') ||
+        urlLower.includes('/media') || urlLower.includes('/upload')) {
+        // 如果URL包含图片路径但没有扩展名，也认为是图片（可能是动态生成的）
+        // 但必须严格排除CSS/JS
+        if (!urlLower.includes('.css') && !urlLower.includes('.js') &&
+            !urlLower.includes('stylesheet') && !urlLower.includes('script') &&
+            !urlLower.endsWith('.css') && !urlLower.endsWith('.js') &&
+            !/\.(css|js)(\?|#|$)/i.test(url)) {
+            return true;
+        }
+    }
+
+    // 检查是否是blob URL（可能是图片，但需要进一步验证）
+    // 注意：blob URL 无法直接判断内容类型，所以这里暂时不拦截
+    // 让其他方式（DOM提取）来处理blob URL
+
+    // 检查URL路径中的图片关键词（更严格的匹配）
+    // 只有在路径中明确包含图片相关目录时才认为是图片
+    const imagePathPatterns = [
+        /\/images?\/[^\/]*$/i,           // /image/xxx 或 /images/xxx
+        /\/photos?\/[^\/]*$/i,            // /photo/xxx 或 /photos/xxx
+        /\/pics?\/[^\/]*$/i,             // /pic/xxx 或 /pics/xxx
+        /\/gallery\/[^\/]*$/i,           // /gallery/xxx
+        /\/media\/[^\/]*$/i,              // /media/xxx
+        /\/assets\/.*\.(jpg|jpeg|png|gif|webp|avif|bmp|svg|ico|tiff?)/i, // /assets/xxx.jpg
+        /\/uploads?\/.*\.(jpg|jpeg|png|gif|webp|avif|bmp|svg|ico|tiff?)/i, // /upload/xxx.jpg
+    ];
+
+    for (const pattern of imagePathPatterns) {
+        if (pattern.test(url)) {
+            // 再次确认不是CSS/JS文件（更严格的检查）
+            if (!urlLower.includes('.css') && !urlLower.includes('.js') &&
+                !urlLower.endsWith('.css') && !urlLower.endsWith('.js') &&
+                !/\.(css|js)(\?|#|$)/i.test(url)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
 }
 
 // 通知应用页面
@@ -135,7 +276,13 @@ function notifyAppPage(action, data) {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     switch (request.action) {
         case 'startNetworkInterceptor':
-            startNetworkInterceptor();
+            const tabId = request.tabId || null;
+            const clearPrevious = request.clearPrevious !== false; // 默认清空之前的记录
+            if (clearPrevious) {
+                interceptedImages.clear(); // 清空之前的拦截记录，只显示新拦截的图片
+            }
+            // 异步执行，但不阻塞响应
+            startNetworkInterceptor(tabId).catch(() => { });
             sendResponse({ success: true });
             break;
 
