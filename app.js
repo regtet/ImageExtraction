@@ -1478,46 +1478,21 @@ function getDedupKeyFromUrl(url, tabId = null) {
 
 // 去重函数 - 移除重复的图片（同一标签页内的重复）
 function removeDuplicateImages() {
-    const seenKeys = new Set(); // 基于完整URL的去重
-    const seenFileKeys = new Set(); // 基于文件名+尺寸+标签页的去重（更严格）
+    // 只基于「规范化后的完整 URL + tabId」去重，
+    // 不再使用「文件名 + 尺寸」作为辅助去重，避免同名不同路径 / 同名同尺寸的不同资源被误删
+    const seenKeys = new Set(); // 基于规范化 URL 的去重
     const uniqueImages = [];
     let removedCount = 0;
-    const duplicateKeys = new Set(); // 记录重复的key，用于调试
-
     allImages.forEach((img, index) => {
-        // 主要去重：使用URL和tabId组合作为去重key
+        // 使用 URL 和 tabId 组合作为唯一 key
         const key = getDedupKeyFromUrl(img.url, img.tabId);
-
-        // 辅助去重：基于文件名+尺寸+标签页（更严格，忽略查询参数）
-        let fileKey = null;
-        if (img.width > 0 && img.height > 0) {
-            try {
-                const fileName = getImageName(img.url);
-                // 使用文件名+尺寸+标签页作为去重key
-                fileKey = `${fileName}::${img.width}×${img.height}::tab:${img.tabId}`.toLowerCase();
-            } catch (e) {
-                // 获取文件名失败，跳过辅助去重
-            }
-        }
-
-        // 检查是否重复
-        const isUrlDuplicate = seenKeys.has(key);
-        const isFileDuplicate = fileKey && seenFileKeys.has(fileKey);
-
-        if (isUrlDuplicate || isFileDuplicate) {
-            // 发现重复
+        if (seenKeys.has(key)) {
+            // 完全相同 URL（同一标签页）才认为是重复
             removedCount++;
-            duplicateKeys.add(key);
-            if (isUrlDuplicate) {
-            }
-            return; // 跳过这个图片
+            return; // 跳过重复图片
         }
-
-        // 不是重复，添加到结果
+        // 不重复，记录并保留
         seenKeys.add(key);
-        if (fileKey) {
-            seenFileKeys.add(fileKey);
-        }
         uniqueImages.push(img);
     });
 
