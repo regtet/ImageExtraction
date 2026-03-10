@@ -1925,6 +1925,16 @@ function setupNetworkMonitoring() {
                     }
                 }
             }
+        } else if (request.action === 'httpRequestDetected') {
+            // HTTP 请求触发的自动提取：根据请求来源标签页触发一次防抖提取
+            if (!autoExtractEnabled) {
+                return true;
+            }
+            const senderTabId = request.data?.tabId || sender.tab?.id || null;
+            if (!senderTabId) {
+                return true;
+            }
+            handleHttpRequestDetected(senderTabId);
         }
         return true; // 保持消息通道开放
     });

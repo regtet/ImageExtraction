@@ -310,6 +310,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             });
             break;
 
+        case 'httpRequestDetected':
+            // 转发来自 content script 的 HTTP 请求事件给应用页面
+            // 由应用页面根据当前选中标签页决定是否触发图片提取
+            notifyAppPage('httpRequestDetected', {
+                url: request.data?.url,
+                type: request.data?.type,
+                tabId: sender.tab?.id ?? null
+            });
+            sendResponse({ success: true });
+            break;
+
         case 'getInterceptedImages':
             sendResponse({
                 success: true,
