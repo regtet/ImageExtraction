@@ -123,8 +123,10 @@ function enableAutoExtract() {
             tabId: selectedTabId,
             clearPrevious: true // 清空之前的拦截记录
         }).catch(() => { });
-        // Performance模式也需要启动content script的Performance Observer
-        if (captureMode === 'performance') {
+        // 同时启动content script的Performance Observer：
+        // - Performance模式：主通道
+        // - WebRequest模式：补偿Service Worker命中导致的webRequest漏拦截
+        if (captureMode === 'performance' || captureMode === 'webrequest') {
             chrome.tabs.sendMessage(selectedTabId, { action: 'startNetworkMonitoring' }).catch(() => { });
         }
     }
@@ -1991,9 +1993,9 @@ function setupTabUpdateWatcher() {
                         }).catch(() => { });
                         chrome.tabs.sendMessage(selectedTabId, { action: 'startNetworkMonitoring' }).catch(() => { });
                     } else if (captureMode === 'webrequest') {
-                        // WebRequest模式：不主动提取，只确保拦截器运行
-                        // 图片会通过拦截器实时添加到列表中
-                        // 拦截器已经在loading阶段启动并清空了记录
+                        // WebRequest模式：主通道是webRequest，补偿通道是Performance Observer
+                        // 处理Service Worker命中等场景，避免仅依赖webRequest导致漏图
+                        chrome.tabs.sendMessage(selectedTabId, { action: 'startNetworkMonitoring' }).catch(() => { });
                     }
                 }
             }, 1000); // 增加延迟，减少频繁刷新导致的抖动
