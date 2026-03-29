@@ -289,6 +289,38 @@ body {
     gap: 8px;
 }
 
+.size-preset-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+}
+
+.size-preset-select {
+    min-width: 170px;
+    max-width: 240px;
+    padding: 5px 10px;
+    border: 2px solid #ced4da;
+    border-radius: 6px;
+    font-size: 12px;
+    background: #fff;
+    color: #495057;
+}
+
+.size-preset-select:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.15);
+}
+
+.btn-size-danger {
+    background: #dc3545;
+}
+
+.btn-size-danger:hover {
+    background: #c82333;
+}
+
 .btn-size-action {
     padding: 5px 12px;
     background: #667eea;
@@ -306,6 +338,13 @@ body {
     background: #5568d3;
     transform: translateY(-1px);
     box-shadow: 0 2px 8px rgba(102, 126, 234, 0.4);
+}
+
+.btn-size-action:disabled {
+    background: #adb5bd;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
 }
 
 .size-tags {

@@ -375,7 +375,7 @@ async function handleTabChange() {
         selectedImages.clear();
         lastClickedIndex = -1;
 
-        // 重置尺寸筛选状态（已隐藏）
+        // 重置尺寸筛选状态
         activeSizeFilters.clear();
         sizeFilterUserCleared = false; // 新标签默认可自动全选
         sizeFilterUserModified = false;
@@ -444,9 +444,8 @@ async function extractImagesUsingPerformanceAPI(tabId) {
 
 // 模式2: 使用WebRequest提取图片（纯实时模式，不提取历史数据）
 async function extractImagesUsingWebRequest(tabId) {
-    // WebRequest模式是纯实时拦截模式，不主动提取历史数据
-    // 图片会通过拦截器实时添加到列表中
-    // 这里返回空数组，表示不提取历史数据
+    // WebRequest 模式保持“纯实时”：不主动提取历史数据
+    // 图片只通过拦截器实时添加到列表中，这里返回空数组
     return [];
 }
 
@@ -843,7 +842,6 @@ function applyFiltersAndSort() {
     // 若用户未主动清空，且未手动修改过筛选，则自动将当前页出现的尺寸加入筛选
     // 但只自动添加数量最多的前10个尺寸，避免自动选中太多尺寸
     if (!sizeFilterUserCleared && !sizeFilterUserModified) {
-        // 统计每个尺寸的数量
         const sizeCountMap = {};
         currentTabImages.forEach(img => {
             if (img.width > 0 && img.height > 0) {
@@ -852,7 +850,6 @@ function applyFiltersAndSort() {
             }
         });
 
-        // 统计小尺寸数量
         let smallCount = 0;
         const regularSizes = {};
         Object.entries(sizeCountMap).forEach(([size, count]) => {
@@ -866,14 +863,12 @@ function applyFiltersAndSort() {
             }
         });
 
-        // 按数量排序，只自动添加前10个数量最多的尺寸（不包括小尺寸）
         const sortedByCount = Object.entries(regularSizes)
-            .sort((a, b) => b[1] - a[1]) // 按数量从多到少排序
-            .slice(0, 10) // 只取前10个
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 10)
             .map(([size]) => size);
 
         let added = false;
-        // 如果小尺寸数量较多，也自动添加
         if (smallCount > 0) {
             if (!activeSizeFilters.has('small')) {
                 activeSizeFilters.add('small');
@@ -891,21 +886,15 @@ function applyFiltersAndSort() {
         }
     }
 
-    // 筛选（仅对DOM和Performance模式生效）
     filteredImages = currentTabImages.filter(img => {
-        // 尺寸筛选
-        // 如果用户主动清空且无选中尺寸，则不显示任何图片
         if (sizeFilterUserCleared && activeSizeFilters.size === 0) return false;
-        // 正常情况：仅当有选中尺寸时限制
         if (activeSizeFilters.size > 0) {
             const width = Math.round(img.width);
             const height = Math.round(img.height);
             const imgSize = `${width}×${height}`;
 
-            // 检查是否匹配选中的尺寸
             let matched = activeSizeFilters.has(imgSize);
 
-            // 如果没匹配，检查是否是小尺寸（100×100以内）且选中了"小尺寸"选项
             if (!matched && width <= 100 && height <= 100 && activeSizeFilters.has('small')) {
                 matched = true;
             }
@@ -916,15 +905,12 @@ function applyFiltersAndSort() {
         return true;
     });
 
-    // 生成尺寸标签（仅基于当前标签页的图片），同时记录当前尺寸集合
     generateSizeTags(currentTabImages, currentSizes);
 
-    // 排序：用户选择的排序方式作为主要排序，尺寸筛选排序作为次要排序
     const toNumber = (n) => Number.isFinite(n) ? n : 0;
     const sizeOrder = activeSizeFilters.size > 0 ? getSizeDisplayOrder() : [];
 
     filteredImages.sort((a, b) => {
-        // 主要排序：用户选择的排序方式
         let primaryResult = 0;
         if (sortType === 'size-desc') {
             primaryResult = (toNumber(b.width) * toNumber(b.height)) - (toNumber(a.width) * toNumber(a.height));
@@ -936,12 +922,10 @@ function applyFiltersAndSort() {
             primaryResult = toNumber(b.height) - toNumber(a.height);
         }
 
-        // 如果主要排序结果不同，直接返回
         if (primaryResult !== 0) {
             return primaryResult;
         }
 
-        // 主要排序结果相同（或未设置排序），使用尺寸筛选排序作为次要排序
         if (activeSizeFilters.size > 0 && sizeOrder.length > 0) {
             const aWidth = Math.round(a.width);
             const aHeight = Math.round(a.height);
@@ -997,6 +981,7 @@ function getSizeDisplayOrder() {
 
 // 生成尺寸标签
 function generateSizeTags(sourceImages = [], presetSizes = null) {
+    if (!sizeTags || !sizeTagsContainer) return;
     // 统计每个尺寸的数量
     const sizeCount = {};
     const SMALL_SIZE_KEY = 'small'; // 小尺寸（100×100以内）的特殊标识
@@ -1214,7 +1199,7 @@ function deselectAllSizes() {
 
 // 更新尺寸筛选按钮状态
 function updateSizeFilterButtons() {
-    // 更新清除筛选按钮显示
+    if (!clearSizeFilterBtn) return;
     if (activeSizeFilters.size > 0) {
         clearSizeFilterBtn.style.display = 'inline-block';
         clearSizeFilterBtn.textContent = `✕ 清除筛选 (${activeSizeFilters.size})`;
@@ -1259,9 +1244,6 @@ function hideSize(size) {
         const sizes = getSizeDisplayOrder();
         activeSizeFilters = new Set(sizes.filter(s => s !== size));
         saveSizeFilterState();
-        // 重新渲染标签以同步UI的active状态
-        generateSizeTags();
-        updateSizeFilterButtons();
         applyFiltersAndSort();
         return;
     }
@@ -1270,8 +1252,6 @@ function hideSize(size) {
     if (activeSizeFilters.has(size)) {
         activeSizeFilters.delete(size);
         saveSizeFilterState();
-        generateSizeTags();
-        updateSizeFilterButtons();
         applyFiltersAndSort();
         return;
     }
@@ -1281,8 +1261,6 @@ function hideSize(size) {
     const sizes = getSizeDisplayOrder();
     activeSizeFilters = new Set(sizes.filter(s => s !== size));
     saveSizeFilterState();
-    generateSizeTags();
-    updateSizeFilterButtons();
     applyFiltersAndSort();
 }
 
@@ -1356,7 +1334,6 @@ function renderImages(totalImagesInTab = filteredImages.length) {
             downloadImage(img, index);
         });
 
-        // 隐藏该尺寸
         const hideSizeBtn = item.querySelector('.hide-size-btn');
         hideSizeBtn.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -1781,8 +1758,8 @@ async function clearAll() {
 
         // 清除尺寸筛选
         activeSizeFilters.clear();
-        clearSizeFilterBtn.style.display = 'none';
-        sizeTagsContainer.style.display = 'none';
+        if (clearSizeFilterBtn) clearSizeFilterBtn.style.display = 'none';
+        if (sizeTagsContainer) sizeTagsContainer.style.display = 'none';
 
         allImages = [];
         filteredImages = [];
